@@ -249,7 +249,7 @@ static int OsSurePrintAll(unsigned int count)
     char readChar = 0;
     printf("\nDisplay all %u possibilities?(y/n)", count);  //显示提示信息
     while (1) {
-        if (read(0, &readChar, 1) != 1) {
+        if (read(STDIN_FILENO, &readChar, 1) != 1) {
             return (int)SH_ERROR;
         }
 		//用户输入n或者N或者CTRL+C，则不显示
