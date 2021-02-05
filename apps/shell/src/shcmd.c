@@ -574,18 +574,10 @@ unsigned int OsCmdKeyShift(const char *cmdKey, char *cmdOut, unsigned int size)
 int OsTabCompletion(char *cmdKey, unsigned int *len)
 {
     int count;
-    char *cmdMainStr = cmdKey;
 
     if ((cmdKey == NULL) || (len == NULL)) {
         return (int)SH_ERROR;
     }
-
-    /* cut left space */
-	//没有啥实际作用，冗余代码
-    while (*cmdMainStr == 0x20) {
-        cmdMainStr++;
-    }
-
 	//命令行自动补全
     count = OsTabMatchFile(cmdKey, len);
 
