@@ -45,6 +45,8 @@ extern "C" {
 #define SHELL_INIT_MAGIC_FLAG 0xABABABAB
 #define CTRL_C 0x03 /* 0x03: ctrl+c ASCII */
 
+
+//释放解析后的命令行参数
 static void OsFreeCmdPara(CmdParsed *cmdParsed)
 {
     unsigned int i;
@@ -56,25 +58,39 @@ static void OsFreeCmdPara(CmdParsed *cmdParsed)
     }
 }
 
+
+//获取tab按键前最后一个字符串(字符串分隔)
+/* 输入参数：
+ * *tabStr 整个命令字符串
+ * parsed 解析后的字符串数组(参数列表)
+ * tabStrLen 命令字符串长度
+ * 输出参数：*tabStr tab按键前最后一个字符串，基于这个字符串来做自动补全
+ * 返回值： 是否成功
+ * 注意：本函数在用户输入TAB键时调用，用于辅助进行自动补全
+ */
 static int OsStrSeparateTabStrGet(const char **tabStr, CmdParsed *parsed, unsigned int tabStrLen)
 {
     char *shiftStr = NULL;
+	//申请2个命令行的长度
     char *tempStr = (char *)malloc(SHOW_MAX_LEN << 1);
     if (tempStr == NULL) {
         return (int)SH_ERROR;
     }
 
     (void)memset_s(tempStr, SHOW_MAX_LEN << 1, 0, SHOW_MAX_LEN << 1);
+	//tempStr和shiftStr各占一半的空间
     shiftStr = tempStr + SHOW_MAX_LEN;
 
+	//tempStr存放原始命令
     if (strncpy_s(tempStr, SHOW_MAX_LEN - 1, *tabStr, tabStrLen)) {
         free(tempStr);
         return (int)SH_ERROR;
     }
 
-    parsed->cmdType = CMD_TYPE_STD;
+    parsed->cmdType = CMD_TYPE_STD;  //标准命令
 
     /* cut useless or repeat space */
+	//删除多余和重复空格后的命令存入shiftStr
     if (OsCmdKeyShift(tempStr, shiftStr, SHOW_MAX_LEN - 1)) {
         free(tempStr);
         return (int)SH_ERROR;
@@ -83,12 +99,15 @@ static int OsStrSeparateTabStrGet(const char **tabStr, CmdParsed *parsed, unsign
     /* get exact position of string to complete */
     /* situation different if end space lost or still exist */
     if ((strlen(shiftStr) == 0) || (tempStr[strlen(tempStr) - 1] != shiftStr[strlen(shiftStr) - 1])) {
-        *tabStr = "";
+		//空命令行或者以空格结尾的命令行
+        *tabStr = "";  //则未来基于空字符串进行命令自动补全
     } else {
+    	//其它情况则以空格分割命令行，切割成参数列表
         if (OsCmdTokenSplit(shiftStr, ' ', parsed)) {
             free(tempStr);
             return (int)SH_ERROR;
         }
+		//基于最后一个参数来做自动补全
         *tabStr = parsed->paramArray[parsed->paramCnt - 1];
     }
 
@@ -96,11 +115,14 @@ static int OsStrSeparateTabStrGet(const char **tabStr, CmdParsed *parsed, unsign
     return SH_OK;
 }
 
+
+//shell程序中也记录一下当前工作目录
 char *OsShellGetWorkingDirtectory()
 {
     return OsGetShellCb()->shellWorkingDirectory;
 }
 
+//更新shell程序中的当前工作目录
 int OsShellSetWorkingDirtectory(const char *dir, size_t len)
 {
     if (dir == NULL) {
@@ -115,6 +137,16 @@ int OsShellSetWorkingDirtectory(const char *dir, size_t len)
     return SH_OK;
 }
 
+/*
+ * 从命令行中拆分成目录名和需要匹配的字符串
+ * 输入参数:
+ * tabStr：完整命令行参数
+ * tabStrLen: 命令行参数长度
+ * 输出参数：
+ * strPath: 需要搜索的目录
+ * nameLooking: 此目录下需要搜索的名称
+ * 返回值：成功or失败
+ */
 static int OsStrSeparate(const char *tabStr, char *strPath, char *nameLooking, unsigned int tabStrLen)
 {
     char *strEnd = NULL;
@@ -123,6 +155,7 @@ static int OsStrSeparate(const char *tabStr, char *strPath, char *nameLooking, u
     char *shellWorkingDirectory = OsShellGetWorkingDirtectory();
     int ret;
 
+	//求出最后一个空格到TAB键之间的字符串
     ret = OsStrSeparateTabStrGet(&tabStr, &parsed, tabStrLen);
     if (ret != SH_OK) {
         return ret;
@@ -130,10 +163,12 @@ static int OsStrSeparate(const char *tabStr, char *strPath, char *nameLooking, u
 
     /* get fullpath str */
     if (*tabStr != '/') {
+		//如果不是绝对路径，则补充成绝对路径(先记录当前工作目录--相对路径指相对于当前工作目录的路径)
         if (strncpy_s(strPath, CMD_MAX_PATH, shellWorkingDirectory, CMD_MAX_PATH - 1)) {
             OsFreeCmdPara(&parsed);
             return (int)SH_ERROR;
         }
+		//如果当前工作目录不是根目录，则还需要在当前工作目录和相对路径中间补充一个分隔符
         if (strcmp(shellWorkingDirectory, "/")) {
             if (strncat_s(strPath, CMD_MAX_PATH - 1, "/", CMD_MAX_PATH - strlen(strPath) - 1)) {
                 OsFreeCmdPara(&parsed);
@@ -142,6 +177,8 @@ static int OsStrSeparate(const char *tabStr, char *strPath, char *nameLooking, u
         }
     }
 
+	//记录绝对路径
+	//或者拼接当前工作路径和相对路径形成绝对路径
     if (strncat_s(strPath, CMD_MAX_PATH - 1, tabStr, CMD_MAX_PATH - strlen(strPath) - 1)) {
         OsFreeCmdPara(&parsed);
         return (int)SH_ERROR;
@@ -150,12 +187,14 @@ static int OsStrSeparate(const char *tabStr, char *strPath, char *nameLooking, u
     /* split str by last '/' */
     strEnd = strrchr(strPath, '/');
     if (strEnd != NULL) {
+		//拷贝最后一个/字符和TAB键之间的字符串
         if (strncpy_s(nameLooking, CMD_MAX_PATH, strEnd + 1, CMD_MAX_PATH - 1)) { /* get cmp str */
             OsFreeCmdPara(&parsed);
             return (int)SH_ERROR;
         }
     }
 
+	//在最后一个/字符后面放入空字符，即strPath以/结尾，例如/usr/lib/
     cutPos = strrchr(strPath, '/');
     if (cutPos != NULL) {
         *(cutPos + 1) = '\0';
@@ -165,6 +204,8 @@ static int OsStrSeparate(const char *tabStr, char *strPath, char *nameLooking, u
     return SH_OK;
 }
 
+
+//翻页控制
 static int OsShowPageInputControl(void)
 {
     char readChar;
@@ -174,45 +215,60 @@ static int OsShowPageInputControl(void)
             printf("\n");
             return (int)SH_ERROR;
         }
+		//如果用户键入q或者Q或者CTRL+C, 则换行后退出显示
         if ((readChar == 'q') || (readChar == 'Q') || (readChar == CTRL_C)) {
             printf("\n");
             return 0;
-        } else if (readChar == '\r') {
+        } else if (readChar == '\r') {  //用户键入了回车键以后，则把 --more-- 那8个字符删除，并允许显示下一页
             printf("\b \b\b \b\b \b\b \b\b \b\b \b\b \b\b \b");
             return 1;
         }
     }
 }
 
+//多页显示控制
 static int OsShowPageControl(unsigned int timesPrint, unsigned int lineCap, unsigned int count)
 {
     if (NEED_NEW_LINE(timesPrint, lineCap)) {
+		//需要换行的情况下，换一行
         printf("\n");
         if (SCREEN_IS_FULL(timesPrint, lineCap) && (timesPrint < count)) {
-            printf("--More--");
-            return OsShowPageInputControl();
+            printf("--More--");  //需要换页的情况下，输出提示
+            return OsShowPageInputControl(); //然后等待用户来控制
         }
     }
-    return 1;
+    return 1;  //其它情况允许继续显示
 }
 
+
+//在预测到需要显示的内容会超过1页时，
+//提示用户是否显示所有的匹配
 static int OsSurePrintAll(unsigned int count)
 {
     char readChar = 0;
-    printf("\nDisplay all %u possibilities?(y/n)", count);
+    printf("\nDisplay all %u possibilities?(y/n)", count);  //显示提示信息
     while (1) {
         if (read(0, &readChar, 1) != 1) {
             return (int)SH_ERROR;
         }
+		//用户输入n或者N或者CTRL+C，则不显示
         if ((readChar == 'n') || (readChar == 'N') || (readChar == CTRL_C)) {
             printf("\n");
             return 0;
         } else if ((readChar == 'y') || (readChar == 'Y') || (readChar == '\r')) {
-            return 1;
+            return 1; //用户输入y或者Y或者回车，则允许显示
         }
     }
 }
 
+
+//显示所有匹配的项目
+/*
+ * count : 总共需要显示的项目数
+ * strPath : 目录路径
+ * nameLooking: 需要匹配的字符串
+ * printLen : 每个项目显示的宽度
+ */
 static int OsPrintMatchList(unsigned int count, const char *strPath, const char *nameLooking, unsigned int printLen)
 {
     unsigned int timesPrint = 0;
@@ -220,34 +276,45 @@ static int OsPrintMatchList(unsigned int count, const char *strPath, const char 
     int ret;
     DIR *openDir = NULL;
     struct dirent *readDir = NULL;
+	//格式字符串的宽度，即"%-xxxs          " 的长度，
     char formatChar[10] = {0}; /* 10:for formatChar length */
 
+	//保留2个字符的原因是，每个显示项目末尾额外显示2个空格
+	//这样才能清楚的辨别不同的显示项目
+	//每个显示项目不能超过1行
     printLen = (printLen > (DEFAULT_SCREEN_WIDTH - 2)) ? (DEFAULT_SCREEN_WIDTH - 2) : printLen; /* 2:revered 2 bytes */
+	//每个显示项目预留2个空字符，每行最多显示lineCap个项目
     lineCap = DEFAULT_SCREEN_WIDTH / (printLen + 2); /* 2:DEFAULT_SCREEN_WIDTH revered 2 bytes */
+	//每个显示项目的格式字符串存入formatChar中
     if (snprintf_s(formatChar, sizeof(formatChar) - 1, 7, "%%-%us  ", printLen) < 0) { /* 7:format-len */
         return (int)SH_ERROR;
     }
 
     if (count > (lineCap * DEFAULT_SCREEN_HEIGNT)) {
+		//所有的显示项目会超过1屏的情况，需要向用户提问是否继续显示
         ret = OsSurePrintAll(count);
         if (ret != 1) {
             return ret;
         }
     }
-    openDir = opendir(strPath);
+    openDir = opendir(strPath);  //先打开项目所在的目录
     if (openDir == NULL) {
         return (int)SH_ERROR;
     }
 
     printf("\n");
-    for (readDir = readdir(openDir); readDir != NULL; readDir = readdir(openDir)) {
+	//遍历目录中的每一个项目
+    for (readDir = readdir(openDir); readDir != NULL; readDir = readdir(openDir)) {		
         if (strncmp(nameLooking, readDir->d_name, strlen(nameLooking)) != 0) {
             continue;
         }
+		//如果匹配我们的名称，那么进行显示
         printf(formatChar, readDir->d_name);
         timesPrint++;
+		//进行换行显示和换页控制
         ret = OsShowPageControl(timesPrint, lineCap, count);
         if (ret != 1) {
+			//用户换页控制时退出了，则关闭目录并退出
             if (closedir(openDir) < 0) {
                 return (int)SH_ERROR;
             }
@@ -256,6 +323,7 @@ static int OsPrintMatchList(unsigned int count, const char *strPath, const char 
     }
 
     printf("\n");
+	//显示完成，也关闭目录退出
     if (closedir(openDir) < 0) {
         return (int)SH_ERROR;
     }
@@ -263,6 +331,8 @@ static int OsPrintMatchList(unsigned int count, const char *strPath, const char 
     return SH_OK;
 }
 
+//对2个字符串比较前n个字符
+//针对第2个字符串，只保留2个字符串相同的部分
 static void StrncmpCut(const char *s1, char *s2, size_t n)
 {
     if ((n == 0) || (s1 == NULL) || (s2 == NULL)) {
@@ -285,59 +355,78 @@ static void StrncmpCut(const char *s1, char *s2, size_t n)
     return;
 }
 
+
+/*
+ * 自动补全命令行
+ * result : 补全后的字符串
+ * target : 补全前的字符串
+ * cmdKey : 命令行缓存
+ * *len : 补全前的命令行缓存长度
+ * 输出值 : *len 补全后的命令行缓存长度
+ *          cmdKey 命令行缓存
+ */
 static void OsCompleteStr(char *result, const char *target, char *cmdKey, unsigned int *len)
 {
-    unsigned int size = strlen(result) - strlen(target);
-    char *des = cmdKey + *len;
-    char *src = result + strlen(target);
+    unsigned int size = strlen(result) - strlen(target);  //需要自动补充的字符数
+    char *des = cmdKey + *len;  //当前需要补全字符的位置
+    char *src = result + strlen(target); //结果字符串数据自动补全位置
 
     while (size-- > 0) {
-        printf("%c", *src);
+        printf("%c", *src);  //将补全的字符显示在屏幕上
         if (*len == (SHOW_MAX_LEN - 1)) {
             *des = '\0';
             break;
         }
-        *des++ = *src++;
+        *des++ = *src++;  //需要补全的字符存入命令缓存
         (*len)++;
     }
 }
 
+
+//执行TAB键自动匹配查找
 static int OsExecNameMatch(const char *strPath, const char *nameLooking, char *strObj, unsigned int *maxLen)
 {
     int count = 0;
     DIR *openDir = NULL;
     struct dirent *readDir = NULL;
 
-    openDir = opendir(strPath);
+    openDir = opendir(strPath);  //打开TAB键之前的这个目录
     if (openDir == NULL) {
         return (int)SH_ERROR;
     }
 
+	//遍历上述目录
     for (readDir = readdir(openDir); readDir != NULL; readDir = readdir(openDir)) {
         if (strncmp(nameLooking, readDir->d_name, strlen(nameLooking)) != 0) {
             continue;
         }
+		//寻找nameLooking匹配的项
         if (count == 0) {
+			//将最开始匹配的项纪录下来
             if (strncpy_s(strObj, CMD_MAX_PATH, readDir->d_name, CMD_MAX_PATH - 1)) {
                 (void)closedir(openDir);
                 return (int)SH_ERROR;
             }
+			//它的长度也记录下来
             *maxLen = strlen(readDir->d_name);
         } else {
             /* strncmp&cut the same strings of name matched */
+			//后续匹配的项目只记录共性的字符串前缀
+			// 假定ab匹配 abcd和abcef, 那么 strObj应该为abc， *maxLen为5			
             StrncmpCut(readDir->d_name, strObj, strlen(strObj));
             if (strlen(readDir->d_name) > *maxLen) {
+				//记录所有匹配项的最大长度
                 *maxLen = strlen(readDir->d_name);
             }
         }
-        count++;
+        count++;  //匹配的项目数
     }
 
     if (closedir(openDir) < 0) {
         return (int)SH_ERROR;
     }
 
-    return count;
+    return count;  //返回匹配的项数
 }
 
 static int OsTabMatchFile(char *cmdKey, unsigned int *len)

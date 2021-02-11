@@ -35,6 +35,9 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
+//用户态init进程的入口函数
+//主要职责就是启动/bin/shell进程
+//并回收shell进程或者其它孤儿进程
 int main(int argc, char * const *argv)
 {
     int ret;
@@ -45,7 +48,7 @@ int main(int argc, char * const *argv)
         printf("Failed to fork for shell\n");
     } else if (ret == 0) {
         (void)execve(shellPath, NULL, NULL);
-        exit(0);
+        exit(0);  //shell进程退出了，整个系统也退出了
     }
 
     while (1) {

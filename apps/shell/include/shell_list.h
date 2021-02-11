@@ -47,6 +47,7 @@ typedef size_t bool;
  * @ingroup shell_list
  * Structure of a node in a doubly linked list.
  */
+ //Ë«ÏòÁ´±í
 typedef struct SH_List {
     struct SH_List *pstPrev; /**< Current node's pointer to the previous node */
     struct SH_List *pstNext; /**< Current node's pointer to the next node */

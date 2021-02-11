@@ -51,6 +51,7 @@ ShellCB *OsGetShellCb()
 
 void ShellDeinit(ShellCB *shellCB)
 {
+	//释放shell相关的数据
     (void)pthread_mutex_destroy(&shellCB->historyMutex);
     (void)pthread_mutex_destroy(&shellCB->keyMutex);
     OsShellKeyDeInit((CmdKeyLink *)shellCB->cmdKeyLink);
@@ -58,11 +59,13 @@ void ShellDeinit(ShellCB *shellCB)
     (void)free(shellCB);
 }
 
+//创建shell进程的2个线程
 static int OsShellCreateTask(ShellCB *shellCB)
 {
     struct sched_param param = { 0 };
     int ret;
 
+	//首先调整进程的调度优先级
     ret = sched_getparam(getpid(), &param);
     if (ret != SH_OK) {
         goto OUT;
@@ -75,17 +78,21 @@ static int OsShellCreateTask(ShellCB *shellCB)
         goto OUT;
     }
 
+	//创建shellTask 线程
     ret = ShellTaskInit(shellCB);
     if (ret != SH_OK) {
         goto OUT;
     }
 
+	//创建shellEntry 线程
     ret = ShellEntryInit(shellCB);
     if (ret != SH_OK) {
         goto OUT;
     }
 
+	//等待shellTask线程退出
     (void)pthread_join(shellCB->shellTaskHandle, NULL);
+	//等待shellEntry线程退出
     (void)pthread_join(shellCB->shellEntryHandle, NULL);
 
 OUT:
@@ -98,10 +105,12 @@ int main()
     int ret = SH_NOK;
     ShellCB *shellCB = NULL;
 
+	//申请shell控制块内存
     shellCB = (ShellCB *)malloc(sizeof(ShellCB));
     if (shellCB == NULL) {
         goto ERR_OUT1;
     }
+	//初始化控制块各字段
     ret = memset_s(shellCB, sizeof(ShellCB), 0, sizeof(ShellCB));
     if (ret != SH_OK) {
         goto ERR_OUT1;
@@ -117,6 +126,7 @@ int main()
         goto ERR_OUT2;
     }
 
+	//命令队列和命令历史队列初始化
     ret = (int)OsShellKeyInit(shellCB);
     if (ret != SH_OK) {
         goto ERR_OUT3;
@@ -126,6 +136,7 @@ int main()
     sem_init(&shellCB->shellSem, 0, 0);
 
     g_shellCB = shellCB;
+	//创建2个线程来
     return OsShellCreateTask(shellCB);
 
 ERR_OUT3:

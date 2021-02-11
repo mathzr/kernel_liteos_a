@@ -51,8 +51,10 @@ int Chdir(const char *tgtDir)
         return SH_ERROR;
     }
 
+	//调用文件系统的当前工作目录更新功能
     ret = chdir(tgtDir);
     if (ret == 0) {
+		//在shell中同步更新当前工作目录
         ret = OsShellSetWorkingDirtectory(tgtDir, strlen(tgtDir) + 1); /* 1: the length of '\0' */
         if (ret != SH_NOK) {
             return ret;

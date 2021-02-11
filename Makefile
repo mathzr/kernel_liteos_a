@@ -27,17 +27,25 @@
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+
+#内核源码根目录
 LITEOSTOPDIR := $(shell if [ "$$PWD" != "" ]; then echo $$PWD; else pwd; fi)
+
+#操作系统名称
 export OS=$(shell uname -s)
 ifneq ($(OS), Linux)
+#对于windows系统需要将路径中\替换成/
 LITEOSTOPDIR := $(shell dirname $(subst \,/,$(LITEOSTOPDIR))/./)
 endif
 
+#第3方源码库对应的目录
 LITEOSTHIRDPARTY := $(LITEOSTOPDIR)/../../third_party
 
+#导出内核源码库和第3方源码库的路径
 export LITEOSTOPDIR
 export LITEOSTHIRDPARTY
 
+#包含另一个编译脚本
 -include $(LITEOSTOPDIR)/tools/build/config.mk
 
 RM = -rm -rf
@@ -53,6 +61,7 @@ LITEOS_MENUCONFIG_H = $(LITEOSTOPDIR)/include/generated/autoconf.h
 LITEOS_PLATFORM_BASE = $(LITEOSTOPDIR)/platform
 LITEOS_PLATFORM_MENUCONFIG_H = $(LITEOS_PLATFORM_BASE)/include/menuconfig.h
 
+#不同的开发板打包不同的文件系统
 ifeq ($(LOSCFG_PLATFORM_HI3518EV300), y)
 FSTYPE = jffs2
 endif
@@ -62,10 +71,13 @@ endif
 ifeq ($(LOSCFG_PLATFORM_QEMU_ARM_VIRT_CA7), y)
 FSTYPE = vfat
 endif
+# outdir = rebase_path(get_path_info(".", "out_dir"))
+# OUTDIR=$outdir
+# OUT = $(OUTDIR)
 ROOTFS_DIR = $(OUT)/rootfs
 ROOTFS_ZIP = $(OUT)/rootfs.zip
 VERSION =
-
+# BUILD  = $(OUT)/obj
 all: $(OUT) $(BUILD) $(LITEOS_TARGET) $(APPS)
 lib: $(OUT) $(BUILD) $(LITEOS_LIBS_TARGET)
 
@@ -88,6 +100,8 @@ debug:
 	$(HIDE)echo "=============== make a debug version  ==============="
 	$(HIDE) $(MAKE) all
 
+# SCRIPTS_PATH = tools/scripts
+# PLATFORM 没有定义
 release:
 ifneq ($(PLATFORM),)
 	$(HIDE)echo "=============== make a release version for platform $(PLATFORM) ==============="

@@ -46,13 +46,20 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+
+//命令链表
 typedef struct {
-    unsigned int count;
-    SH_List list;
-    char cmdString[0];
+    unsigned int count;  //链表中的命令个数，特别是历史命令的时候比较有用
+    SH_List list;  //将命令连接起来
+    char cmdString[0]; //本条命令的字符串
 } CmdKeyLink;
 
+//每行能打印的字符串个数是lineCap
+//所以每打印lineCap个字符串都得换行了
 #define NEED_NEW_LINE(timesPrint, lineCap) ((timesPrint) % (lineCap) == 0)
+
+//每行能打印的字符串数与屏幕行数的乘积为每一屏最多能打印的字符串个数
+//超过这个数目一屏打印不下
 #define SCREEN_IS_FULL(timesPrint, lineCap) ((timesPrint) >= ((lineCap) * DEFAULT_SCREEN_HEIGNT))
 
 extern unsigned int OsCmdExec(CmdParsed *cmdParsed, char *cmdStr);

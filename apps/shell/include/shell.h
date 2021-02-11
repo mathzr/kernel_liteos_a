@@ -47,6 +47,7 @@ extern "C" {
 #define SHELL_PROCESS_PRIORITY_INIT     15
 
 #define PATH_MAX                        256
+//最多支持的参数个数
 #define CMD_MAX_PARAS                   32
 #define CMD_KEY_LEN                     16U
 #define CMD_MAX_LEN                     (256U + CMD_KEY_LEN)
@@ -56,6 +57,7 @@ extern "C" {
 #define DEFAULT_SCREEN_WIDTH            80
 #define DEFAULT_SCREEN_HEIGNT           24
 
+//切换引用状态，即当前是在双引号内部还是外部
 #define SWITCH_QUOTES_STATUS(qu) do {   \
     if ((qu) == TRUE) {                 \
         (qu) = FALSE;                   \
@@ -64,35 +66,38 @@ extern "C" {
     }                                   \
 } while (0)
 
+//在双引号外部
 #define QUOTES_STATUS_CLOSE(qu) ((qu) == FALSE)
+//在双引号内部
 #define QUOTES_STATUS_OPEN(qu)  ((qu) == TRUE)
 
 typedef size_t bool;
 
 typedef struct {
-    unsigned int   consoleID;
-    pthread_t      shellTaskHandle;
-    pthread_t      shellEntryHandle;
-    void     *cmdKeyLink;
-    void     *cmdHistoryKeyLink;
-    void     *cmdMaskKeyLink;
-    unsigned int   shellBufOffset;
-    unsigned int   shellKeyType;
-    sem_t           shellSem;
-    pthread_mutex_t keyMutex;
-    pthread_mutex_t historyMutex;
-    char     shellBuf[SHOW_MAX_LEN];
-    char     shellWorkingDirectory[PATH_MAX];
+    unsigned int   consoleID;   //串口或者telnet
+    pthread_t      shellTaskHandle;  //命令处理线程
+    pthread_t      shellEntryHandle; //字符串解析线程
+    void     *cmdKeyLink;  //命令链表，用于2个线程间传递命令
+    void     *cmdHistoryKeyLink;  //命令历史链表
+    void     *cmdMaskKeyLink;     //当前选中的历史命令
+    unsigned int   shellBufOffset;  //命令缓存中下一个写入的位置
+    unsigned int   shellKeyType;    
+    sem_t           shellSem;     //2个线程间同步的信号量
+    pthread_mutex_t keyMutex;     //保护命令链表的锁
+    pthread_mutex_t historyMutex; //保护命令历史链表的锁
+    char     shellBuf[SHOW_MAX_LEN];  //命令缓存
+    char     shellWorkingDirectory[PATH_MAX];  //当前工作目录
 } ShellCB;
 
 /* All support cmd types */
 typedef enum {
-    CMD_TYPE_SHOW = 0,
-    CMD_TYPE_STD = 1,
-    CMD_TYPE_EX = 2,
+    CMD_TYPE_SHOW = 0,  //显示命令
+    CMD_TYPE_STD = 1,  //标准命令
+    CMD_TYPE_EX = 2,   //扩展命令
     CMD_TYPE_BUTT
 } CmdType;
 
+//方向按键
 typedef enum {
     CMD_KEY_UP = 0,
     CMD_KEY_DOWN = 1,

@@ -44,10 +44,14 @@ extern "C" {
 /*
  * Description: the info struct after cmd parser
  */
+//解析后的命令行参数列表
 typedef struct {
+	//参数个数
     unsigned int paramCnt;          /* count of para */
     CmdType      cmdType;           /* cmd type, judge cmd keyword */
+	//命令字符串，含参数
     char cmdKeyword[CMD_KEY_LEN];   /* cmd keyword str */
+	//解析后的参数字符串数组
     char *paramArray[CMD_MAX_PARAS];
 } CmdParsed;
 
