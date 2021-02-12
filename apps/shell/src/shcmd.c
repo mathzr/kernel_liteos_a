@@ -429,35 +429,45 @@ static int OsExecNameMatch(const char *strPath, const char *nameLooking, char *s
     return count;  //返回匹配的项数
 }
 
+
+//按下TAB键以后对当前命令的文件名(目录名)进行匹配和自动补全
 static int OsTabMatchFile(char *cmdKey, unsigned int *len)
 {
     unsigned int maxLen = 0;
     int count;
     char *strOutput = NULL;
     char *strCmp = NULL;
+	//直接申请3个字符串空间
+	//分别是需要打开的目录名称，匹配后的结果字符串，匹配前的待比较字符串
     char *dirOpen = (char *)malloc(CMD_MAX_PATH * 3); /* 3:dirOpen\strOutput\strCmp */
     if (dirOpen == NULL) {
         return (int)SH_ERROR;
     }
 
+	//将3个字符串的起始地址设置好
     (void)memset_s(dirOpen, CMD_MAX_PATH * 3, 0, CMD_MAX_PATH * 3); /* 3:dirOpen\strOutput\strCmp */
     strOutput = dirOpen + CMD_MAX_PATH;
     strCmp = strOutput + CMD_MAX_PATH;
 
+	//从命令缓存中获取待匹配的目录和待匹配的字符串(部分文件名或目录名)
     if (OsStrSeparate(cmdKey, dirOpen, strCmp, *len)) {
         free(dirOpen);
         return (int)SH_ERROR;
     }
 
+	//执行名称匹配动作，匹配后的结果字符串存入strOutput, 此结果用来做自动补全
+	//匹配的文件或者目录数通过count返回
     count = OsExecNameMatch(dirOpen, strCmp, strOutput, &maxLen);
     /* one or more matched */
     if (count >= 1) {
+		//存在匹配的情况，先做自动补全动作
         OsCompleteStr(strOutput, strCmp, cmdKey, len);
 
         if (count == 1) {
             free(dirOpen);
             return 1;
         }
+		//如果有多项匹配，则还需要把每个匹配的项显示出来
         if (OsPrintMatchList((unsigned int)count, dirOpen, strCmp, maxLen) == -1) {
             free(dirOpen);
             return (int)SH_ERROR;
@@ -477,6 +487,7 @@ static int OsTabMatchFile(char *cmdKey, unsigned int *len)
  *              cmdOut : Pass out the buffer string ,which has already been operated
  *              size : cmdKey length
  */
+ //将命令中多余和重复的空格清除后，存入cmdOut。
 unsigned int OsCmdKeyShift(const char *cmdKey, char *cmdOut, unsigned int size)
 {
     char *output = NULL;
@@ -490,9 +501,10 @@ unsigned int OsCmdKeyShift(const char *cmdKey, char *cmdOut, unsigned int size)
     }
 
     len = strlen(cmdKey);
-    if ((*cmdKey == '\n') || (len >= size)) {
+    if ((*cmdKey == '\n') || (len >= size)) {		
         return (unsigned int)SH_ERROR;
     }
+	//用来存储中间结果
     output = (char *)malloc(len + 1);
     if (output == NULL) {
         printf("malloc failure in %s[%d]", __FUNCTION__, __LINE__);
@@ -500,11 +512,13 @@ unsigned int OsCmdKeyShift(const char *cmdKey, char *cmdOut, unsigned int size)
     }
 
     /* Backup the 'output' start address */
-    outputBak = output;
+    outputBak = output;  //先备份字符串起始地址
     /* Scan each charactor in 'cmdKey',and squeeze the overmuch space and ignore invaild charactor */
+	//遍历含多余空格的字符串
     for (; *cmdKey != '\0'; cmdKey++) {
         /* Detected a Double Quotes, switch the matching status */
         if (*(cmdKey) == '\"') {
+			//一旦遇到双引号，则切换双引号状态，表明当前在双引号内，还是外
             SWITCH_QUOTES_STATUS(quotes);
         }
         /* Ignore the current charactor in following situation */
@@ -513,10 +527,13 @@ unsigned int OsCmdKeyShift(const char *cmdKey, char *cmdOut, unsigned int size)
         /* 3) Next charactor is a space too, or the string is been seeked to the end already(\0) */
         /* 4) Invaild charactor, such as single quotes */
         if ((*cmdKey == ' ') && ((*(cmdKey + 1) == ' ') || (*(cmdKey + 1) == '\0')) && QUOTES_STATUS_CLOSE(quotes)) {
+			//存在连续空格的情况下，只保留最后一个空格
+			//字符串末尾的空格也不保留
+			//但双引号中的空格需要保留
             continue;
         }
         if (*cmdKey == '\'') {
-            continue;
+            continue;  //单引号不保留
         }
         *output = *cmdKey;
         output++;
@@ -527,21 +544,28 @@ unsigned int OsCmdKeyShift(const char *cmdKey, char *cmdOut, unsigned int size)
     len = strlen(output);
     /* Clear the space which is located at the first charactor in buffer */
     if (*output == ' ') {
+		//按照前述算法，如果字符串最开始由空格
+		//那么会遗留一个空格
+		//我们也需要将其去掉
         output++;
         len--;
     }
     /* Copy out the buffer which is been operated already */
+	//最终的结果就是cmdOut中不含起始和结束空格，且中间无连续空格(双引号中除外)
     ret = strncpy_s(cmdOut, size, output, len);
     if (ret != SH_OK) {
         printf("%s,%d strncpy_s failed, err:%d!\n", __FUNCTION__, __LINE__, ret);
         free(outputBak);
         return SH_ERROR;
     }
+	//别忘记字符串结尾符
     cmdOut[len] = '\0';
 
     free(outputBak);
     return SH_OK;
 }
+
+//命令行自动补全功能
 int OsTabCompletion(char *cmdKey, unsigned int *len)
 {
     int count;
@@ -552,15 +576,19 @@ int OsTabCompletion(char *cmdKey, unsigned int *len)
     }
 
     /* cut left space */
+	//没有啥实际作用，冗余代码
     while (*cmdMainStr == 0x20) {
         cmdMainStr++;
     }
 
+	//命令行自动补全
     count = OsTabMatchFile(cmdKey, len);
 
     return count;
 }
 
+
+//初始化shell相关的命令链表和命令历史链表
 unsigned int OsShellKeyInit(ShellCB *shellCB)
 {
     CmdKeyLink *cmdKeyLink = NULL;
@@ -570,11 +598,13 @@ unsigned int OsShellKeyInit(ShellCB *shellCB)
         return SH_ERROR;
     }
 
+	//申请命令链表头节点内存
     cmdKeyLink = (CmdKeyLink *)malloc(sizeof(CmdKeyLink));
     if (cmdKeyLink == NULL) {
         printf("Shell CmdKeyLink memory alloc error!\n");
         return SH_ERROR;
     }
+	//申请命令历史链表头节点内存
     cmdHistoryLink = (CmdKeyLink *)malloc(sizeof(CmdKeyLink));
     if (cmdHistoryLink == NULL) {
         free(cmdKeyLink);
@@ -582,17 +612,22 @@ unsigned int OsShellKeyInit(ShellCB *shellCB)
         return SH_ERROR;
     }
 
+	//初始化命令链表
     cmdKeyLink->count = 0;
     SH_ListInit(&(cmdKeyLink->list));
     shellCB->cmdKeyLink = (void *)cmdKeyLink;
 
+	//初始化命令历史链表
     cmdHistoryLink->count = 0;
     SH_ListInit(&(cmdHistoryLink->list));
     shellCB->cmdHistoryKeyLink = (void *)cmdHistoryLink;
+	//初始化命令历史游标，即当前选中了哪个历史命令，初始状态未选中任何命令
     shellCB->cmdMaskKeyLink = (void *)cmdHistoryLink;
     return SH_OK;
 }
 
+
+//清空命令链表或者命令历史链表
 void OsShellKeyDeInit(CmdKeyLink *cmdKeyLink)
 {
     CmdKeyLink *cmdtmp = NULL;
@@ -610,6 +645,8 @@ void OsShellKeyDeInit(CmdKeyLink *cmdKeyLink)
     free(cmdKeyLink);
 }
 
+
+//生成命令并放入命令队列中
 void OsShellCmdPush(const char *string, CmdKeyLink *cmdKeyLink)
 {
     CmdKeyLink *cmdNewNode = NULL;
@@ -619,6 +656,7 @@ void OsShellCmdPush(const char *string, CmdKeyLink *cmdKeyLink)
         return;
     }
 
+	//根据命令字符串生成命令
     len = strlen(string);
     cmdNewNode = (CmdKeyLink *)malloc(sizeof(CmdKeyLink) + len + 1);
     if (cmdNewNode == NULL) {
@@ -631,43 +669,50 @@ void OsShellCmdPush(const char *string, CmdKeyLink *cmdKeyLink)
         return;
     }
 
+	//按照FIFO方式放入命令队列
     SH_ListTailInsert(&(cmdKeyLink->list), &(cmdNewNode->list));
 
     return;
 }
 
+//在用户键入上下方向键时，显示历史命令
 void OsShellHistoryShow(unsigned int value, ShellCB *shellCB)
 {
     CmdKeyLink *cmdtmp = NULL;
-    CmdKeyLink *cmdNode = shellCB->cmdHistoryKeyLink;
-    CmdKeyLink *cmdMask = shellCB->cmdMaskKeyLink;
+    CmdKeyLink *cmdNode = shellCB->cmdHistoryKeyLink; //命令历史链表
+    CmdKeyLink *cmdMask = shellCB->cmdMaskKeyLink; //当前历史游标
     int ret;
 
     (void)pthread_mutex_lock(&shellCB->historyMutex);
     if (value == CMD_KEY_DOWN) {
         if (cmdMask == cmdNode) {
-            goto END;
+            goto END; //在按下方向键时，已经浏览过最新的命令
         }
 
+		//往更新的方向浏览下一个命令
         cmdtmp = SH_LIST_ENTRY(cmdMask->list.pstNext, CmdKeyLink, list);
         if (cmdtmp != cmdNode) {
-            cmdMask = cmdtmp;
+            cmdMask = cmdtmp;  //更新命令游标
         } else {
-            goto END;
+            goto END; //已经到达最新的命令
         }
     } else if (value == CMD_KEY_UP) {
+    	//往更老的方向浏览上一个命令
         cmdtmp = SH_LIST_ENTRY(cmdMask->list.pstPrev, CmdKeyLink, list);
         if (cmdtmp != cmdNode) {
-            cmdMask = cmdtmp;
+            cmdMask = cmdtmp; //更新命令游标
         } else {
-            goto END;
+            goto END;  //已经浏览过更老的命令
         }
     }
 
+	//清空命令缓存中的内容
     while (shellCB->shellBufOffset--) {
-        printf("\b \b");
+		//并在屏幕上删除已显示的命令
+        printf("\b \b");  //回退一格，显示空格，再回退。达到删除一个符号的效果
     }
-    printf("%s", cmdMask->cmdString);
+    printf("%s", cmdMask->cmdString);  //在屏幕上显示命令游标对应的命令，即用户感受到了上下方向键的效果
+    //刷新命令缓存
     shellCB->shellBufOffset = strlen(cmdMask->cmdString);
     (void)memset_s(shellCB->shellBuf, SHOW_MAX_LEN, 0, SHOW_MAX_LEN);
     ret = memcpy_s(shellCB->shellBuf, SHOW_MAX_LEN, cmdMask->cmdString, shellCB->shellBufOffset);
@@ -675,7 +720,7 @@ void OsShellHistoryShow(unsigned int value, ShellCB *shellCB)
         printf("%s, %d memcpy failed!\n", __FUNCTION__, __LINE__);
         goto END;
     }
-    shellCB->cmdMaskKeyLink = (void *)cmdMask;
+    shellCB->cmdMaskKeyLink = (void *)cmdMask;  //记录命令游标
 
 END:
     (void)pthread_mutex_unlock(&shellCB->historyMutex);
