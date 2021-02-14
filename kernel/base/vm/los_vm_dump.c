@@ -54,6 +54,7 @@ extern "C" {
 #define     FLAG_SIZE               4
 #define     FLAG_START              2
 
+//获取内存区域名称或者对应的文件
 const CHAR *OsGetRegionNameOrFilePath(LosVmMapRegion *region)
 {
     struct file *filep = NULL;
@@ -62,26 +63,28 @@ const CHAR *OsGetRegionNameOrFilePath(LosVmMapRegion *region)
 #ifdef LOSCFG_FS_VFS
     } else if (LOS_IsRegionFileValid(region)) {
         filep = region->unTypeData.rf.file;
-        return filep->f_path;
+        return filep->f_path; //此内存区域映射到了一个具名的文件，使用文件路径来描述此内存区域
 #endif
     } else if (region->regionFlags & VM_MAP_REGION_FLAG_HEAP) {
-        return "HEAP";
+        return "HEAP"; //堆区
     } else if (region->regionFlags & VM_MAP_REGION_FLAG_STACK) {
-        return "STACK";
+        return "STACK"; //栈区
     } else if (region->regionFlags & VM_MAP_REGION_FLAG_TEXT) {
-        return "Text";
+        return "Text";  //代码区
     } else if (region->regionFlags & VM_MAP_REGION_FLAG_VDSO) {
-        return "VDSO";
+        return "VDSO";  //VDSO区
     } else if (region->regionFlags & VM_MAP_REGION_FLAG_MMAP) {
-        return "MMAP";
+        return "MMAP";  //匿名内存映射区
     } else if (region->regionFlags & VM_MAP_REGION_FLAG_SHM) {
-        return "SHM";
+        return "SHM";   //共享内存区
     } else {
         return "";
     }
     return "";
 }
 
+
+//检查内存区region是否在内存空间space中是否有相重叠的内存区
 INT32 OsRegionOverlapCheckUnlock(LosVmSpace *space, LosVmMapRegion *region)
 {
     LosVmMapRegion *regionTemp = NULL;
@@ -92,7 +95,7 @@ INT32 OsRegionOverlapCheckUnlock(LosVmSpace *space, LosVmMapRegion *region)
     RB_SCAN_SAFE(&space->regionRbTree, pstRbNode, pstRbNodeNext)
         regionTemp = (LosVmMapRegion *)pstRbNode;
         if (region->range.base == regionTemp->range.base && region->range.size == regionTemp->range.size) {
-            continue;
+            continue;  //相同内存区不算重叠
         }
         if (((region->range.base + region->range.size) > regionTemp->range.base) &&
             (region->range.base < (regionTemp->range.base + regionTemp->range.size))) {
@@ -108,6 +111,8 @@ INT32 OsRegionOverlapCheckUnlock(LosVmSpace *space, LosVmMapRegion *region)
     return 0;
 }
 
+
+//本内存空间的内存使用情况
 UINT32 OsShellCmdProcessVmUsage(LosVmSpace *space)
 {
     LosVmMapRegion *region = NULL;
@@ -120,17 +125,21 @@ UINT32 OsShellCmdProcessVmUsage(LosVmSpace *space)
     }
 
     if (space == LOS_GetKVmSpace()) {
+		//内核内存空间的使用情况
         OsShellCmdProcessPmUsage(space, NULL, &used);
     } else {
+    	//进程的内存空间使用情况
         RB_SCAN_SAFE(&space->regionRbTree, pstRbNode, pstRbNodeNext)
             region = (LosVmMapRegion *)pstRbNode;
             used += region->range.size;
         RB_SCAN_SAFE_END(&space->regionRbTree, pstRbNode, pstRbNodeNext)
     }
 
-    return used;
+    return used;  //返回内存占用情况
 }
 
+
+//内核态进程存储占用情况
 VOID OsKProcessPmUsage(LosVmSpace *kSpace, UINT32 *actualPm)
 {
     UINT32 memUsed;
@@ -147,11 +156,11 @@ VOID OsKProcessPmUsage(LosVmSpace *kSpace, UINT32 *actualPm)
         return;
     }
 
-    memUsed = LOS_MemTotalUsedGet(m_aucSysMem1);
-    totalMem = LOS_MemPoolSizeGet(m_aucSysMem1);
-    freeMem = totalMem - memUsed;
+    memUsed = LOS_MemTotalUsedGet(m_aucSysMem1); //内存总用量
+    totalMem = LOS_MemPoolSizeGet(m_aucSysMem1); //内存总量
+    freeMem = totalMem - memUsed; //空闲内存总量
 
-    OsVmPhysUsedInfoGet(&usedCount, &totalCount);
+    OsVmPhysUsedInfoGet(&usedCount, &totalCount);  //物理内存页使用量和总量
     /* Kernel resident memory, include default heap memory */
     memUsed = SYS_MEM_SIZE_DEFAULT - (totalCount << PAGE_SHIFT);
 

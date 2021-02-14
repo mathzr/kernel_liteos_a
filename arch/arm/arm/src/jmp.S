@@ -30,23 +30,26 @@
  */
 
 #include "asm.h"
-
+//longjmp函数实现
 FUNCTION(longjmp)
+		//将r4到r12的9个寄存器入栈保存
         ldmfd   r0,{r4-r12}
-        add     r0,#(4 * 9)
-        ldr     r13,[r0]
-        add     r0,#4
-        ldr     r14,[r0]
-        cmp     r1,#0
-        moveq   r1,#1
-        mov     r0,r1
-        mov     pc,lr
+        add     r0,#(4 * 9) // r0 += 36
+        ldr     r13,[r0]    // r13 = *r0
+        add     r0,#4       // r0 += 4
+        ldr     r14,[r0]    // r14 = *r0
+        cmp     r1,#0       // if(r1 == 0)
+        moveq   r1,#1       //     r1 = 1
+        mov     r0,r1       // r0 = r1
+        mov     pc,lr       // pc = lr
 
+//setjmp函数实现
 FUNCTION(setjmp)
+		//从栈中恢复寄存器r4到r12的值
         stmea   r0,{r4-r12}
-        add     r0,#(4 * 9)
-        str     r13,[r0]
-        add     r0,#4
-        str     r14,[r0]
-        mov     r0,#0
-        mov     pc,lr
+        add     r0,#(4 * 9) //r0 += 36
+        str     r13,[r0]    //*r0 = r13
+        add     r0,#4       // r0 += 4
+        str     r14,[r0]    // *r0 = r14
+        mov     r0,#0       // r0 = 0
+        mov     pc,lr       // pc = lr

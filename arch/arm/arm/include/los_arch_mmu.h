@@ -47,10 +47,15 @@ extern "C" {
 #endif /* __cplusplus */
 
 typedef struct ArchMmu {
+	//保护MMU的互斥锁
     LosMux              mtx;            /**< arch mmu page table entry modification mutex lock */
+	//虚拟页映射表的首地址(内核虚拟地址)
     VADDR_T             *virtTtb;       /**< translation table base virtual addr */
+	//映射表的物理地址
     PADDR_T             physTtb;        /**< translation table base phys addr */
+	//每个页映射表对应一个地址空间，这里记录地址空间的ID
     UINT32              asid;           /**< TLB asid */
+	//已使用的物理内存页表
     LOS_DL_LIST         ptList;         /**< page table vm page list */
 } LosArchMmu;
 

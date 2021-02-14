@@ -45,7 +45,11 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//地址空间ID管理
+
 STATIC SPIN_LOCK_INIT(g_cpuAsidLock);
+
+//用一个扩展的位图来管理地址空间ID的分配情况
 STATIC UINTPTR g_asidPool[BITMAP_NUM_WORDS(1UL << MMU_ARM_ASID_BITS)];
 
 /* allocate and free asid */
@@ -53,23 +57,26 @@ status_t OsAllocAsid(UINT32 *asid)
 {
     UINT32 flags;
     LOS_SpinLockSave(&g_cpuAsidLock, &flags);
+	//从第0位开始寻找还未分配的地址空间
     UINT32 firstZeroBit = LOS_BitmapFfz(g_asidPool, 1UL << MMU_ARM_ASID_BITS);
     if (firstZeroBit >= 0 && firstZeroBit < (1UL << MMU_ARM_ASID_BITS)) {
+		//查找成功
+		//首先标记这个地址空间被占用
         LOS_BitmapSetNBits(g_asidPool, firstZeroBit, 1);
-        *asid = firstZeroBit;
+        *asid = firstZeroBit; //记录查找到的地址空间ID
         LOS_SpinUnlockRestore(&g_cpuAsidLock, flags);
         return LOS_OK;
     }
 
     LOS_SpinUnlockRestore(&g_cpuAsidLock, flags);
-    return firstZeroBit;
+    return firstZeroBit;  //这里会返回一个错误的ID
 }
 
 VOID OsFreeAsid(UINT32 asid)
 {
     UINT32 flags;
     LOS_SpinLockSave(&g_cpuAsidLock, &flags);
-    LOS_BitmapClrNBits(g_asidPool, asid, 1);
+    LOS_BitmapClrNBits(g_asidPool, asid, 1);  //标记指定的地址空间ID不再使用
     LOS_SpinUnlockRestore(&g_cpuAsidLock, flags);
 }
 

@@ -61,7 +61,7 @@ typedef struct {
     UINT64 SP;
     UINT64 regELR;
     UINT64 SPSR;
-} ExcContext;
+} ExcContext;   //64位ARM异常信息上下文
 #else
 typedef struct {
     UINT32 USP;     /**< User mode stack pointer */
@@ -83,7 +83,7 @@ typedef struct {
     UINT32 SP;      /**< Stack pointer */
     UINT32 LR;      /**< Program returning address. */
     UINT32 PC;      /**< PC pointer of the exceptional function */
-} ExcContext;
+} ExcContext;  //32位ARM的异常信息上下文
 #endif
 
 /**
@@ -99,7 +99,7 @@ typedef struct {
     UINT16 nestCnt;      /**< Count of nested exception */
     UINT16 reserved;     /**< Reserved for alignment */
     ExcContext *context; /**< Hardware context when an exception occurs */
-} ExcInfo;
+} ExcInfo; //异常信息控制块
 
 /**
  * @ingroup los_exc

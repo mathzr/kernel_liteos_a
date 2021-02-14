@@ -36,35 +36,45 @@
 
 // errno_t _arm_put_user(void *dst, const void *src, size_t dstTypeLen, size_t srcTypeLen)
 FUNCTION(_arm_put_user)
+//各寄存器压栈
     stmdb   sp!, {r0, r1, r2, r3, lr}
+//dstTypeLen == 0, 跳转到get_user_return
     cmp     r2, #0
     beq     .Lget_user_return
+//dstTypeLen != srcTypeLen, 跳转到get_user_err
     cmp     r2, r3
     bne     .Lget_user_err
+//dstTypeLen == srcTypeLen, dstTypeLen > 1, 跳转到get_user_half
     cmp     r2, #1
     bhi     .Lget_user_half
 .Lget_user_byte:
+//dstTypeLen == 1, 从内核空间拷贝一个字节到用户空间，*dst = *src
 0:  ldrb    r3, [r1], #0
 1:  strbt   r3, [r0], #0
     b       .Lget_user_return
 .Lget_user_half:
+//dstTypeLen > 2, 跳转到get_user_word
     cmp     r2, #2
     bhi     .Lget_user_word
+//dstTypeLen == 2, 从内核空间拷贝二个字节到用户空间，*dst = *src
 2:  ldrh    r3, [r1], #0
 3:  strht   r3, [r0], #0
     b       .Lget_user_return
 .Lget_user_word:
     cmp     r2, #4
     bhi     .Lget_user_err
+//dstTypeLen == 4, 从内核空间拷贝四个字节到用户空间，*dst = *src
 4:  ldr    r3, [r1], #0
 5:  strt   r3, [r0], #0
 .Lget_user_return:
     ldmia   sp!, {r0, r1, r2, r3, lr}
-    mov     r0, 0
+    mov     r0, 0  //成功拷贝，返回0
     bx      lr
 .Lget_user_err:
+//只支持1,2,4字节的拷贝，不支持其它
+//其它错误情况也从这里返回
     ldmia   sp!, {r0, r1, r2, r3, lr}
-    mov     r0, #-14
+    mov     r0, #-14 //返回错误值 -14
     bx      lr
 
 .pushsection __exc_table, "a"

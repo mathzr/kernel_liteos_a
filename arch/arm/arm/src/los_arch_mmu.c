@@ -64,12 +64,17 @@ extern CHAR __mmu_ttlb_begin; /* defined in .ld script */
 UINT8 *g_mmuJumpPageTable = (UINT8 *)&__mmu_ttlb_begin; /* temp page table, this is only used when system power up */
 #endif
 
+//返回二级页表基地址
 STATIC INLINE PTE_T *OsGetPte2BasePtr(PTE_T pte1)
 {
+	//一级页表项中，取高22位，低10位取0做为2级页表的首地址(物理地址)
     PADDR_T pa = MMU_DESCRIPTOR_L1_PAGE_TABLE_ADDR(pte1);
-    return LOS_PaddrToKVaddr(pa);
+    return LOS_PaddrToKVaddr(pa); //然后计算出对应的内核虚拟地址
 }
 
+
+//取消vaddr开始的*count内存页的映射
+//释放的内存页不能跨越1M的边界，因为1级页表项对应的内存页大小是1M
 STATIC INLINE UINT32 OsUnmapL1Invalid(vaddr_t *vaddr, UINT32 *count)
 {
     UINT32 unmapCount;
@@ -82,6 +87,8 @@ STATIC INLINE UINT32 OsUnmapL1Invalid(vaddr_t *vaddr, UINT32 *count)
     return unmapCount;
 }
 
+
+//内存映射参数检查
 STATIC INT32 OsMapParamCheck(UINT32 flags, VADDR_T vaddr, PADDR_T paddr)
 {
 #if !WITH_ARCH_MMU_PICK_SPOT
@@ -93,10 +100,11 @@ STATIC INT32 OsMapParamCheck(UINT32 flags, VADDR_T vaddr, PADDR_T paddr)
 
     if (!(flags & VM_MAP_REGION_FLAG_PERM_READ)) {
         VM_ERR("miss read flag");
-        return LOS_ERRNO_VM_INVALID_ARGS;
+        return LOS_ERRNO_VM_INVALID_ARGS;  //必须具备读权限
     }
 
     /* paddr and vaddr must be aligned */
+	//物理地址和虚拟地址都必须是页对齐的
     if (!MMU_DESCRIPTOR_IS_L2_SIZE_ALIGNED(vaddr) || !MMU_DESCRIPTOR_IS_L2_SIZE_ALIGNED(paddr)) {
         return LOS_ERRNO_VM_INVALID_ARGS;
     }
@@ -104,6 +112,8 @@ STATIC INT32 OsMapParamCheck(UINT32 flags, VADDR_T vaddr, PADDR_T paddr)
     return 0;
 }
 
+
+//将二级页表里页表项中的内存页属性读取出来
 STATIC VOID OsCvtPte2AttsToFlags(PTE_T l1Entry, PTE_T l2Entry, UINT32 *flags)
 {
     *flags = 0;
@@ -146,12 +156,15 @@ STATIC VOID OsCvtPte2AttsToFlags(PTE_T l1Entry, PTE_T l2Entry, UINT32 *flags)
     }
 }
 
+
+//在一级页表项中释放二级页表
 STATIC VOID OsPutL2Table(const LosArchMmu *archMmu, UINT32 l1Index, paddr_t l2Paddr)
 {
     LosVmPage *vmPage = NULL;
     UINT32 index;
     PTE_T ttEntry;
     /* check if any l1 entry points to this l2 table */
+	//估计一级页表中相邻的4个页表项中的任何1个都可以描述二级页表的起始地址
     for (index = 0; index < MMU_DESCRIPTOR_L1_SMALL_L2_TABLES_PER_PAGE; index++) {
         ttEntry = archMmu->virtTtb[ROUNDDOWN(l1Index, MMU_DESCRIPTOR_L1_SMALL_L2_TABLES_PER_PAGE) + index];
         if ((ttEntry &  MMU_DESCRIPTOR_L1_TYPE_MASK) == MMU_DESCRIPTOR_L1_TYPE_PAGE_TABLE) {
@@ -159,16 +172,19 @@ STATIC VOID OsPutL2Table(const LosArchMmu *archMmu, UINT32 l1Index, paddr_t l2Pa
         }
     }
     /* we can free this l2 table */
-    vmPage = LOS_VmPageGet(l2Paddr);
+    vmPage = LOS_VmPageGet(l2Paddr);  //根据物理地址获取对应的物理页面
     if (vmPage == NULL) {
         LOS_Panic("bad page table paddr %#x\n", l2Paddr);
         return;
     }
 
+	//释放上述物理页面
     LOS_ListDelete(&vmPage->node);
     LOS_PhysPageFree(vmPage);
 }
 
+
+//释放二级页表项时，尝试取消一级页表项的内存映射
 STATIC VOID OsTryUnmapL1PTE(const LosArchMmu *archMmu, vaddr_t vaddr, UINT32 scanIndex, UINT32 scanCount)
 {
     /*
@@ -180,12 +196,14 @@ STATIC VOID OsTryUnmapL1PTE(const LosArchMmu *archMmu, vaddr_t vaddr, UINT32 sca
     PTE_T l1Entry;
     PTE_T *pte2BasePtr = NULL;
 
+	//获取二级页表起始地址
     pte2BasePtr = OsGetPte2BasePtr(OsGetPte1(archMmu->virtTtb, vaddr));
     if (pte2BasePtr == NULL) {
         VM_ERR("pte2 base ptr is NULL");
         return;
     }
 
+	//连续扫描scanCount二级页表项，看其是否都为空
     while (scanCount) {
         if (scanIndex == MMU_DESCRIPTOR_L2_NUMBERS_PER_L1) {
             scanIndex = 0;
@@ -197,18 +215,25 @@ STATIC VOID OsTryUnmapL1PTE(const LosArchMmu *archMmu, vaddr_t vaddr, UINT32 sca
     }
 
     if (!scanCount) {
+		//如果被扫描的页表项都为空
+		//那么我们释放这个二级页表
+		//需要修订描述此二级页表的一级页表项
         l1Index = OsGetPte1Index(vaddr);
         l1Entry = archMmu->virtTtb[l1Index];
         /* we can kill l1 entry */
+		//清空对应的一级页表项
         OsClearPte1(&archMmu->virtTtb[l1Index]);
+		//并同步刷新对应的MMU硬件
         OsArmInvalidateTlbMvaNoBarrier(l1Index << MMU_DESCRIPTOR_L1_SMALL_SHIFT);
 
         /* try to free l2 page itself */
+		//然后尝试释放相关的二级页表占用的物理内存
         OsPutL2Table(archMmu, l1Index, MMU_DESCRIPTOR_L1_PAGE_TABLE_ADDR(l1Entry));
     }
 }
 
 /* convert user level mmu flags to L1 descriptors flags */
+//将用户可见的内存页属性映射成一级页表项的属性
 STATIC UINT32 OsCvtSecFlagsToAttrs(UINT32 flags)
 {
     UINT32 mmuFlags = MMU_DESCRIPTOR_L1_SMALL_DOMAIN_CLIENT;
@@ -262,6 +287,8 @@ STATIC UINT32 OsCvtSecFlagsToAttrs(UINT32 flags)
     return mmuFlags;
 }
 
+
+//将一级页表项的属性映射成用户可见的内存页属性
 STATIC VOID OsCvtSecAttsToFlags(PTE_T l1Entry, UINT32 *flags)
 {
     *flags = 0;
@@ -304,92 +331,119 @@ STATIC VOID OsCvtSecAttsToFlags(PTE_T l1Entry, UINT32 *flags)
     }
 }
 
+
+//取消一个二级页表项的内存映射
 STATIC UINT32 OsUnmapL2PTE(const LosArchMmu *archMmu, vaddr_t vaddr, UINT32 *count)
 {
     UINT32 unmapCount;
     UINT32 pte2Index;
     PTE_T *pte2BasePtr = NULL;
 
+	//获取二级页表基地址
     pte2BasePtr = OsGetPte2BasePtr(OsGetPte1((PTE_T *)archMmu->virtTtb, vaddr));
     if (pte2BasePtr == NULL) {
         LOS_Panic("%s %d, pte2 base ptr is NULL\n", __FUNCTION__, __LINE__);
     }
 
+	//获取二级页表中页表项编号
     pte2Index = OsGetPte2Index(vaddr);
+	//从当前释放的内存页开始，在二级页表项中，最多可以取消映射的内存页数目
     unmapCount = MIN2(MMU_DESCRIPTOR_L2_NUMBERS_PER_L1 - pte2Index, *count);
 
     /* unmap page run */
+	//释放连续的二级页表项
     OsClearPte2Continuous(&pte2BasePtr[pte2Index], unmapCount);
 
     /* invalidate tlb */
+	//刷新硬件TLB
     OsArmInvalidateTlbMvaRangeNoBarrier(vaddr, unmapCount);
 
-    *count -= unmapCount;
-    return unmapCount;
+    *count -= unmapCount;  //用户要求取消映射的内存页可能还未释放完，需要反馈给用户
+    return unmapCount;  //返回当前取消映射的内存页数目
 }
 
+
+//取消一级页表中某页表项的内存映射
 STATIC UINT32 OsUnmapSection(LosArchMmu *archMmu, vaddr_t *vaddr, UINT32 *count)
 {
+	//取消映射
     OsClearPte1(OsGetPte1Ptr((PTE_T *)archMmu->virtTtb, *vaddr));
+	//并刷新TLB缓存
     OsArmInvalidateTlbMvaNoBarrier(*vaddr);
 
-    *vaddr += MMU_DESCRIPTOR_L1_SMALL_SIZE;
-    *count -= MMU_DESCRIPTOR_L2_NUMBERS_PER_L1;
+    *vaddr += MMU_DESCRIPTOR_L1_SMALL_SIZE;  //下一个需要取消映射的虚拟地址
+    *count -= MMU_DESCRIPTOR_L2_NUMBERS_PER_L1; //还需要取消映射的内存页数目
 
-    return MMU_DESCRIPTOR_L2_NUMBERS_PER_L1;
+    return MMU_DESCRIPTOR_L2_NUMBERS_PER_L1;  //返回本次取消映射的内存页数目
 }
 
-
+//初始化MMU
 BOOL OsArchMmuInit(LosArchMmu *archMmu, VADDR_T *virtTtb)
 {
+	//分配一个MMU ID
     if (OsAllocAsid(&archMmu->asid) != LOS_OK) {
         VM_ERR("alloc arch mmu asid failed");
         return FALSE;
     }
 
+	//初始化MMU软件操作互斥锁
     status_t retval = LOS_MuxInit(&archMmu->mtx, NULL);
     if (retval != LOS_OK) {
         VM_ERR("Create mutex for arch mmu failed, status: %d", retval);
         return FALSE;
     }
 
+	//初始化MMU内正在使用的内存页链表
     LOS_ListInit(&archMmu->ptList);
-    archMmu->virtTtb = virtTtb;
+    archMmu->virtTtb = virtTtb;  //初始化一级页表首地址
+    //初始化一级页表物理地址
     archMmu->physTtb = (VADDR_T)(UINTPTR)virtTtb - KERNEL_ASPACE_BASE + SYS_MEM_BASE;
     return TRUE;
 }
 
+//根据虚拟地址来查询物理地址
+//高12位用来索引一级页表
 STATUS_T LOS_ArchMmuQuery(const LosArchMmu *archMmu, VADDR_T vaddr, PADDR_T *paddr, UINT32 *flags)
 {
-    PTE_T l1Entry = OsGetPte1(archMmu->virtTtb, vaddr);
+	
+    PTE_T l1Entry = OsGetPte1(archMmu->virtTtb, vaddr);  //根据高12位查询到一级页表项
     PTE_T l2Entry;
     PTE_T* l2Base = NULL;
 
+	//页表项的最后2位决定了这个页表项的类型
     if (OsIsPte1Invalid(l1Entry)) {
-        return LOS_ERRNO_VM_NOT_FOUND;
-    } else if (OsIsPte1Section(l1Entry)) {
+        return LOS_ERRNO_VM_NOT_FOUND;  //此页表项还未使用
+    } else if (OsIsPte1Section(l1Entry)) { //普通页表项
         if (paddr != NULL) {
+			//物理地址的后20位与虚拟地址相同
+			//物理地址的高12位与页表项的高12位相同
             *paddr = MMU_DESCRIPTOR_L1_SECTION_ADDR(l1Entry) + (vaddr & (MMU_DESCRIPTOR_L1_SMALL_SIZE - 1));
         }
 
         if (flags != NULL) {
+			//记录此一级页表中内存页的一些属性:非安全页，uncache, uncache device,读，写，执行，修改user
             OsCvtSecAttsToFlags(l1Entry, flags);
         }
-    } else if (OsIsPte1PageTable(l1Entry)) {
-        l2Base = OsGetPte2BasePtr(l1Entry);
+    } else if (OsIsPte1PageTable(l1Entry)) {  //表明还有二级页表
+        l2Base = OsGetPte2BasePtr(l1Entry); //取得2级页表基地址
         if (l2Base == NULL) {
             return LOS_ERRNO_VM_NOT_FOUND;
         }
-        l2Entry = OsGetPte2(l2Base, vaddr);
+        l2Entry = OsGetPte2(l2Base, vaddr); //取得二级页表项，页表项在二级页表中的偏移是虚拟地址第12位到第19位，即中间的8位
         if (OsIsPte2SmallPage(l2Entry) || OsIsPte2SmallPageXN(l2Entry)) {
+			//在二级页表中页表的最后2位代表大内存页或者小内存页
+			//小内存页的情况
             if (paddr != NULL) {
+				//物理地址由  页表项的高20位和虚拟地址的低12位组成
                 *paddr = MMU_DESCRIPTOR_L2_SMALL_PAGE_ADDR(l2Entry) + (vaddr & (MMU_DESCRIPTOR_L2_SMALL_SIZE - 1));
             }
 
             if (flags != NULL) {
+				//记录二级页表中内存页的一些属性:非安全页，uncache, uncache device,读，写，执行，修改user
                 OsCvtPte2AttsToFlags(l1Entry, l2Entry, flags);
             }
         } else if (OsIsPte2LargePage(l2Entry)) {
+        	//现在第二级页表还不支持大内存页
             LOS_Panic("%s %d, large page unimplemented\n", __FUNCTION__, __LINE__);
         } else {
             return LOS_ERRNO_VM_NOT_FOUND;
@@ -399,51 +453,69 @@ STATUS_T LOS_ArchMmuQuery(const LosArchMmu *archMmu, VADDR_T vaddr, PADDR_T *pad
     return LOS_OK;
 }
 
+
+//从虚拟地址vaddr开始，取消连续count内存页的映射
 STATUS_T LOS_ArchMmuUnmap(LosArchMmu *archMmu, VADDR_T vaddr, size_t count)
 {
     PTE_T l1Entry;
     INT32 unmapped = 0;
     UINT32 unmapCount = 0;
 
-    while (count > 0) {
-        l1Entry = OsGetPte1(archMmu->virtTtb, vaddr);
-        if (OsIsPte1Invalid(l1Entry)) {
+	//按用户要求取消内存页映射，直到所有相关内存页的映射都取消
+    while (count > 0) {  
+        l1Entry = OsGetPte1(archMmu->virtTtb, vaddr);  //获取一级页表项
+        if (OsIsPte1Invalid(l1Entry)) {  //此表项未使用
+        	//说明这里是一个内存空洞，即当前这个表项对应的虚拟地址暂时未使用
+        	//我们仍然做虚拟内存的释放处理，只是内部没有物理内存页的释放逻辑
+        	//这样做，才能继续释放后面的合法的一级页表项
             unmapCount = OsUnmapL1Invalid(&vaddr, &count);
         } else if (OsIsPte1Section(l1Entry)) {
+        	//合法的一级页表项的取消映射过程
             if (MMU_DESCRIPTOR_IS_L1_SIZE_ALIGNED(vaddr) && count >= MMU_DESCRIPTOR_L2_NUMBERS_PER_L1) {
+				//一级页表项的取消映射直接取消了256物理内存页的映射(256 * 4K == 1M)
                 unmapCount = OsUnmapSection(archMmu, &vaddr, &count);
             } else {
+            	//目前暂不支持释放过程将一级页表项切分成二级页表
                 LOS_Panic("%s %d, unimplemented\n", __FUNCTION__, __LINE__);
             }
         } else if (OsIsPte1PageTable(l1Entry)) {
+        	//当前地址应当从二级页表中释放表项
+        	//先按要求释放二级页表中的表项
             unmapCount = OsUnmapL2PTE(archMmu, vaddr, &count);
+			//也许二级页表中所有表项都空闲了，这个时候整个二级页表也应该释放
             OsTryUnmapL1PTE(archMmu, vaddr, OsGetPte2Index(vaddr) + unmapCount,
                             MMU_DESCRIPTOR_L2_NUMBERS_PER_L1 - unmapCount);
             vaddr += unmapCount << MMU_DESCRIPTOR_L2_SMALL_SHIFT;
         } else {
             LOS_Panic("%s %d, unimplemented\n", __FUNCTION__, __LINE__);
         }
-        unmapped += unmapCount;
+        unmapped += unmapCount;  //记录以及释放的内存页数
     }
-    OsArmInvalidateTlbBarrier();
-    return unmapped;
+    OsArmInvalidateTlbBarrier();  //刷新硬件TLB缓存
+    return unmapped;  //返回已经取消映射的页数，这个值应该与函数调用时传入的count相等
 }
 
+
+//映射成一级页表项
 STATIC UINT32 OsMapSection(const LosArchMmu *archMmu, UINT32 flags, VADDR_T *vaddr,
                            PADDR_T *paddr, UINT32 *count)
 {
     UINT32 mmuFlags = 0;
 
+	//先做内存页属性信息转换
     mmuFlags |= OsCvtSecFlagsToAttrs(flags);
+	//更新页表项信息，写入物理地址，属性信息，页表项类型
     OsSavePte1(OsGetPte1Ptr(archMmu->virtTtb, *vaddr),
         OsTruncPte1(*paddr) | mmuFlags | MMU_DESCRIPTOR_L1_TYPE_SECTION);
-    *count -= MMU_DESCRIPTOR_L2_NUMBERS_PER_L1;
-    *vaddr += MMU_DESCRIPTOR_L1_SMALL_SIZE;
-    *paddr += MMU_DESCRIPTOR_L1_SMALL_SIZE;
+    *count -= MMU_DESCRIPTOR_L2_NUMBERS_PER_L1; //相当于映射了256内存页
+    *vaddr += MMU_DESCRIPTOR_L1_SMALL_SIZE; //下一次需要映射的内存地址在当前基础上增加1M
+    *paddr += MMU_DESCRIPTOR_L1_SMALL_SIZE; //下一次需要映射的物理地址增加1M
 
-    return MMU_DESCRIPTOR_L2_NUMBERS_PER_L1;
+    return MMU_DESCRIPTOR_L2_NUMBERS_PER_L1; //返回已经成功映射的内存页数
 }
 
+
+//申请二级页表，获取二级页表的物理首地址
 STATIC STATUS_T OsGetL2Table(LosArchMmu *archMmu, UINT32 l1Index, paddr_t *ppa)
 {
     UINT32 index;
@@ -453,9 +525,13 @@ STATIC STATUS_T OsGetL2Table(LosArchMmu *archMmu, UINT32 l1Index, paddr_t *ppa)
     UINT32 l2Offset = (MMU_DESCRIPTOR_L2_SMALL_SIZE / MMU_DESCRIPTOR_L1_SMALL_L2_TABLES_PER_PAGE) *
         (l1Index & (MMU_DESCRIPTOR_L1_SMALL_L2_TABLES_PER_PAGE - 1));
     /* lookup an existing l2 page table */
+	//1个二级页表256个表项
+	//4个二级页表共享一个物理内存页
+	//所以先判断这个物理内存页是否存在
     for (index = 0; index < MMU_DESCRIPTOR_L1_SMALL_L2_TABLES_PER_PAGE; index++) {
         ttEntry = archMmu->virtTtb[ROUNDDOWN(l1Index, MMU_DESCRIPTOR_L1_SMALL_L2_TABLES_PER_PAGE) + index];
         if ((ttEntry & MMU_DESCRIPTOR_L1_TYPE_MASK) == MMU_DESCRIPTOR_L1_TYPE_PAGE_TABLE) {
+			//然后返回这个物理内存页中逻辑上的那个二级页表首地址
             *ppa = (PADDR_T)ROUNDDOWN(MMU_DESCRIPTOR_L1_PAGE_TABLE_ADDR(ttEntry), MMU_DESCRIPTOR_L2_SMALL_SIZE) +
                 l2Offset;
             return LOS_OK;
@@ -463,20 +539,27 @@ STATIC STATUS_T OsGetL2Table(LosArchMmu *archMmu, UINT32 l1Index, paddr_t *ppa)
     }
 
     /* not found: allocate one (paddr) */
+	//申请一个物理内存页来放二级页表: 注意这里可以放4个二级页表，我们暂时只用其中1个
+	//后面再用其余的3个，见上面for循环逻辑
     vmPage = LOS_PhysPageAlloc();
     if (vmPage == NULL) {
         VM_ERR("have no memory to save l2 page");
         return LOS_ERRNO_VM_NO_MEMORY;
     }
+	//此内存页放入放入已使用链表
     LOS_ListAdd(&archMmu->ptList, &vmPage->node);
-    kvaddr = OsVmPageToVaddr(vmPage);
+    kvaddr = OsVmPageToVaddr(vmPage); //获得此内存页的内核虚拟地址
+    //先将此内存页内容清空
     (VOID)memset_s(kvaddr, MMU_DESCRIPTOR_L2_SMALL_SIZE, 0, MMU_DESCRIPTOR_L2_SMALL_SIZE);
 
     /* get physical address */
+	//获取此内存页中，逻辑上的二级页表的起始地址(物理地址)
     *ppa = LOS_PaddrQuery(kvaddr) + l2Offset;
     return LOS_OK;
 }
 
+
+//申请二级页表，并刷新对应的一级页表项
 STATIC VOID OsMapL1PTE(LosArchMmu *archMmu, PTE_T *pte1Ptr, vaddr_t vaddr, UINT32 flags)
 {
     paddr_t pte2Base = 0;
@@ -485,16 +568,19 @@ STATIC VOID OsMapL1PTE(LosArchMmu *archMmu, PTE_T *pte1Ptr, vaddr_t vaddr, UINT3
         LOS_Panic("%s %d, failed to allocate pagetable\n", __FUNCTION__, __LINE__);
     }
 
-    *pte1Ptr = pte2Base | MMU_DESCRIPTOR_L1_TYPE_PAGE_TABLE;
+    *pte1Ptr = pte2Base | MMU_DESCRIPTOR_L1_TYPE_PAGE_TABLE; //记录二级页表的起始地址，以及一级页表项的类型为页表
+    //设置各种属性信息
     if (flags & VM_MAP_REGION_FLAG_NS) {
         *pte1Ptr |= MMU_DESCRIPTOR_L1_PAGETABLE_NON_SECURE;
     }
     *pte1Ptr &= MMU_DESCRIPTOR_L1_SMALL_DOMAIN_MASK;
     *pte1Ptr |= MMU_DESCRIPTOR_L1_SMALL_DOMAIN_CLIENT; // use client AP
+    //刷新页表项，包括TLB
     OsSavePte1(OsGetPte1Ptr(archMmu->virtTtb, vaddr), *pte1Ptr);
 }
 
 /* convert user level mmu flags to L2 descriptors flags */
+//转换用户可见的属性到二级页表项对应的属性
 STATIC UINT32 OsCvtPte2FlagsToAttrs(uint32_t flags)
 {
     UINT32 mmuFlags = 0;
@@ -547,12 +633,15 @@ STATIC UINT32 OsCvtPte2FlagsToAttrs(uint32_t flags)
     return mmuFlags;
 }
 
+
+//映射连续的二级页表项，每一个页表项代表4K大小的内存页
 STATIC UINT32 OsMapL2PageContinous(PTE_T pte1, UINT32 flags, VADDR_T *vaddr, PADDR_T *paddr, UINT32 *count)
 {
     PTE_T *pte2BasePtr = NULL;
     UINT32 archFlags;
     UINT32 saveCounts;
 
+	//获取二级页表的首地址
     pte2BasePtr = OsGetPte2BasePtr(pte1);
     if (pte2BasePtr == NULL) {
         LOS_Panic("%s %d, pte1 %#x error\n", __FUNCTION__, __LINE__, pte1);
@@ -560,13 +649,17 @@ STATIC UINT32 OsMapL2PageContinous(PTE_T pte1, UINT32 flags, VADDR_T *vaddr, PAD
 
     /* compute the arch flags for L2 4K pages */
     archFlags = OsCvtPte2FlagsToAttrs(flags);
+	//在二级页表中做实际的连续页表项映射
     saveCounts = OsSavePte2Continuous(pte2BasePtr, OsGetPte2Index(*vaddr), *paddr | archFlags, *count);
+	//记录下一次映射的起始地址(物理地址，虚拟地址)， 剩余还未映射的内存页数目
     *paddr += (saveCounts << MMU_DESCRIPTOR_L2_SMALL_SHIFT);
     *vaddr += (saveCounts << MMU_DESCRIPTOR_L2_SMALL_SHIFT);
     *count -= saveCounts;
-    return saveCounts;
+    return saveCounts;  //返回已经成功映射的数目
 }
 
+
+//将指定起始地址的虚拟地址和物理地址映射起来，映射指定的内存页数目，并给出相关的内存属性
 status_t LOS_ArchMmuMap(LosArchMmu *archMmu, VADDR_T vaddr, PADDR_T paddr, size_t count, UINT32 flags)
 {
     PTE_T l1Entry;
@@ -581,29 +674,41 @@ status_t LOS_ArchMmuMap(LosArchMmu *archMmu, VADDR_T vaddr, PADDR_T paddr, size_
 
     /* see what kind of mapping we can use */
     while (count > 0) {
+		//物理地址和虚拟地址都满足L1页表项标准
+		//且需要映射的内存块不低于1M字节，那么先使用1个L1表项来映射
         if (MMU_DESCRIPTOR_IS_L1_SIZE_ALIGNED(vaddr) &&
             MMU_DESCRIPTOR_IS_L1_SIZE_ALIGNED(paddr) &&
             count >= MMU_DESCRIPTOR_L2_NUMBERS_PER_L1) {
             /* compute the arch flags for L1 sections cache, r ,w ,x, domain and type */
+			//映射成L1常规表项
             saveCounts = OsMapSection(archMmu, flags, &vaddr, &paddr, &count);
         } else {
             /* have to use a L2 mapping, we only allocate 4KB for L1, support 0 ~ 1GB */
+			//剩下的只能使用L2表项来映射了
+			//先读取此虚拟地址对应的L1表项
             l1Entry = OsGetPte1(archMmu->virtTtb, vaddr);
             if (OsIsPte1Invalid(l1Entry)) {
+				//如果当前L1表项还未使用
+				//那么申请一个L2页表
                 OsMapL1PTE(archMmu, &l1Entry, vaddr, flags);
+				//并在L2页表进行实际的内存映射
                 saveCounts = OsMapL2PageContinous(l1Entry, flags, &vaddr, &paddr, &count);
             } else if (OsIsPte1PageTable(l1Entry)) {
+				//当前已经存在对应的L2页表，则直接在L2页表中进行映射
                 saveCounts = OsMapL2PageContinous(l1Entry, flags, &vaddr, &paddr, &count);
             } else {
+				//一级常规页表项得先释放以后，才能换成二级页表
                 LOS_Panic("%s %d, unimplemented tt_entry %x\n", __FUNCTION__, __LINE__, l1Entry);
             }
         }
-        mapped += saveCounts;
+        mapped += saveCounts;   //已映射的内存页数目统计
     }
 
     return mapped;
 }
 
+
+//针对已经映射的连续内存页，修改其属性
 STATUS_T LOS_ArchMmuChangeProt(LosArchMmu *archMmu, VADDR_T vaddr, size_t count, UINT32 flags)
 {
     STATUS_T status;
@@ -616,18 +721,20 @@ STATUS_T LOS_ArchMmuChangeProt(LosArchMmu *archMmu, VADDR_T vaddr, size_t count,
 
     while (count > 0) {
         count--;
+		//先查询内存页虚拟地址对应的物理地址
         status = LOS_ArchMmuQuery(archMmu, vaddr, &paddr, NULL);
         if (status != LOS_OK) {
-            vaddr += MMU_DESCRIPTOR_L2_SMALL_SIZE;
+            vaddr += MMU_DESCRIPTOR_L2_SMALL_SIZE;  //空洞页面，即无对应物理地址的页面
             continue;
         }
 
-        status = LOS_ArchMmuUnmap(archMmu, vaddr, 1);
+        status = LOS_ArchMmuUnmap(archMmu, vaddr, 1); //取消原内存页的映射
         if (status < 0) {
             VM_ERR("invalid args:aspace %p, vaddr %p, count %d", archMmu, vaddr, count);
             return LOS_NOK;
         }
 
+		//然后重新映射，这个时候携带新的属性
         status = LOS_ArchMmuMap(archMmu, vaddr, paddr, 1, flags);
         if (status < 0) {
             VM_ERR("invalid args:aspace %p, vaddr %p, count %d",
@@ -639,6 +746,9 @@ STATUS_T LOS_ArchMmuChangeProt(LosArchMmu *archMmu, VADDR_T vaddr, size_t count,
     return LOS_OK;
 }
 
+
+//对虚拟地址进行重映射，即同一个物理内存页从原虚拟内存页映射到新的虚拟内存页
+//针对多个内存页进行操作
 STATUS_T LOS_ArchMmuMove(LosArchMmu *archMmu, VADDR_T oldVaddr, VADDR_T newVaddr, size_t count, UINT32 flags)
 {
     STATUS_T status;
@@ -652,13 +762,16 @@ STATUS_T LOS_ArchMmuMove(LosArchMmu *archMmu, VADDR_T oldVaddr, VADDR_T newVaddr
 
     while (count > 0) {
         count--;
+		//查询旧地址虚拟内存页对应的物理内存页
         status = LOS_ArchMmuQuery(archMmu, oldVaddr, &paddr, NULL);
         if (status != LOS_OK) {
+			//内存空洞，此虚拟内存页不存在，考察下一个内存页
             oldVaddr += MMU_DESCRIPTOR_L2_SMALL_SIZE;
             newVaddr += MMU_DESCRIPTOR_L2_SMALL_SIZE;
             continue;
         }
         // we need to clear the mapping here and remain the phy page.
+        //取消此虚拟内存页的映射
         status = LOS_ArchMmuUnmap(archMmu, oldVaddr, 1);
         if (status < 0) {
             VM_ERR("invalid args: archMmu %p, vaddr %p, count %d",
@@ -666,12 +779,14 @@ STATUS_T LOS_ArchMmuMove(LosArchMmu *archMmu, VADDR_T oldVaddr, VADDR_T newVaddr
             return LOS_NOK;
         }
 
+		//将此物理地址映射到新的虚拟内存页
         status = LOS_ArchMmuMap(archMmu, newVaddr, paddr, 1, flags);
         if (status < 0) {
             VM_ERR("invalid args:archMmu %p, old_vaddr %p, new_addr %p, count %d",
                    archMmu, oldVaddr, newVaddr, count);
             return LOS_NOK;
         }
+		//继续映射后面的内存页
         oldVaddr += MMU_DESCRIPTOR_L2_SMALL_SIZE;
         newVaddr += MMU_DESCRIPTOR_L2_SMALL_SIZE;
     }
@@ -679,47 +794,55 @@ STATUS_T LOS_ArchMmuMove(LosArchMmu *archMmu, VADDR_T oldVaddr, VADDR_T newVaddr
     return LOS_OK;
 }
 
+
+//任务切换时，更换内存页表
 VOID LOS_ArchMmuContextSwitch(LosArchMmu *archMmu)
 {
     UINT32 ttbr;
     UINT32 ttbcr = OsArmReadTtbcr();
     if (archMmu) {
+		//更换到目标MMU
         ttbr = MMU_TTBRx_FLAGS | (archMmu->physTtb);
         /* enable TTBR0 */
         ttbcr &= ~MMU_DESCRIPTOR_TTBCR_PD0;
     } else {
+		//更换成禁用MMU
         ttbr = 0;
         /* disable TTBR0 */
         ttbcr |= MMU_DESCRIPTOR_TTBCR_PD0;
     }
 
     /* from armv7a arm B3.10.4, we should do synchronization changes of ASID and TTBR. */
-    OsArmWriteContextidr(LOS_GetKVmSpace()->archMmu.asid);
+    OsArmWriteContextidr(LOS_GetKVmSpace()->archMmu.asid); //同步内核ASID到硬件
     ISB;
-    OsArmWriteTtbr0(ttbr);
+    OsArmWriteTtbr0(ttbr); //上述信息写硬件
     ISB;
-    OsArmWriteTtbcr(ttbcr);
+    OsArmWriteTtbcr(ttbcr); //上述信息写硬件
     ISB;
     if (archMmu) {
-        OsArmWriteContextidr(archMmu->asid);
+        OsArmWriteContextidr(archMmu->asid);  //同步目标MMU的ASID到硬件
         ISB;
     }
 }
 
+
+//释放指定MMU下面的所有内存页
 STATUS_T LOS_ArchMmuDestroy(LosArchMmu *archMmu)
 {
     LosVmPage *page = NULL;
     /* free all of the pages allocated in archMmu->ptList */
     while ((page = LOS_ListRemoveHeadType(&archMmu->ptList, LosVmPage, node)) != NULL) {
-        LOS_PhysPageFree(page);
+        LOS_PhysPageFree(page); //遍历所有内存页，并释放
     }
 
-    OsArmWriteTlbiasid(archMmu->asid);
-    OsFreeAsid(archMmu->asid);
-    (VOID)LOS_MuxDestroy(&archMmu->mtx);
+    OsArmWriteTlbiasid(archMmu->asid);  //刷新此MMU的硬件ASID
+    OsFreeAsid(archMmu->asid); //释放ASID
+    (VOID)LOS_MuxDestroy(&archMmu->mtx); //释放此MMU的互斥锁
     return LOS_OK;
 }
 
+
+//将内核一级页表切换到临时页表
 STATIC VOID OsSwitchTmpTTB(VOID)
 {
     PTE_T *tmpTtbase = NULL;
@@ -727,6 +850,7 @@ STATIC VOID OsSwitchTmpTTB(VOID)
     LosVmSpace *kSpace = LOS_GetKVmSpace();
 
     /* ttbr address should be 16KByte align */
+	//申请16K的内存来存放内核一级页表
     tmpTtbase = LOS_MemAllocAlign(m_aucSysMem0, MMU_DESCRIPTOR_L1_SMALL_ENTRY_NUMBERS,
                                   MMU_DESCRIPTOR_L1_SMALL_ENTRY_NUMBERS);
     if (tmpTtbase == NULL) {
@@ -735,6 +859,7 @@ STATIC VOID OsSwitchTmpTTB(VOID)
     }
 
     kSpace->archMmu.virtTtb = tmpTtbase;
+	//拷贝一级页表的内容
     err = memcpy_s(kSpace->archMmu.virtTtb, MMU_DESCRIPTOR_L1_SMALL_ENTRY_NUMBERS,
                    g_firstPageTable, MMU_DESCRIPTOR_L1_SMALL_ENTRY_NUMBERS);
     if (err != EOK) {
@@ -743,46 +868,60 @@ STATIC VOID OsSwitchTmpTTB(VOID)
         VM_ERR("memcpy failed, errno: %d", err);
         return;
     }
+	//记录新的一级页表
     kSpace->archMmu.physTtb = LOS_PaddrQuery(kSpace->archMmu.virtTtb);
+	//并刷新硬件
     OsArmWriteTtbr0(kSpace->archMmu.physTtb | MMU_TTBRx_FLAGS);
     ISB;
 }
 
+
+//初始状态的一级页表首地址
 VADDR_T *OsGFirstTableGet()
 {
     return (VADDR_T *)g_firstPageTable;
 }
 
+
+//内核相关内存段设置
+//每段内存有若干内存页
 STATIC VOID OsSetKSectionAttr(VOID)
 {
     /* every section should be page aligned */
+	//代码段
     UINTPTR textStart = (UINTPTR)&__text_start;
     UINTPTR textEnd = (UINTPTR)&__text_end;
+	//只读数据段
     UINTPTR rodataStart = (UINTPTR)&__rodata_start;
     UINTPTR rodataEnd = (UINTPTR)&__rodata_end;
+	//可读写数据段
     UINTPTR ramDataStart = (UINTPTR)&__ram_data_start;
+	//数据段结尾
     UINTPTR bssEnd = (UINTPTR)&__bss_end;
+	//对齐填充后的数据段结尾
     UINT32 bssEndBoundary = ROUNDUP(bssEnd, MB);
+	
     LosArchMmuInitMapping mmuKernelMappings[] = {
         {
+        	//代码段情况
             .phys = SYS_MEM_BASE + textStart - KERNEL_VMM_BASE,
             .virt = textStart,
             .size = ROUNDUP(textEnd - textStart, MMU_DESCRIPTOR_L2_SMALL_SIZE),
-            .flags = VM_MAP_REGION_FLAG_PERM_READ | VM_MAP_REGION_FLAG_PERM_EXECUTE,
+            .flags = VM_MAP_REGION_FLAG_PERM_READ | VM_MAP_REGION_FLAG_PERM_EXECUTE,  //代码段数据不可写，可读，可执行
             .name = "kernel_text"
         },
         {
             .phys = SYS_MEM_BASE + rodataStart - KERNEL_VMM_BASE,
             .virt = rodataStart,
             .size = ROUNDUP(rodataEnd - rodataStart, MMU_DESCRIPTOR_L2_SMALL_SIZE),
-            .flags = VM_MAP_REGION_FLAG_PERM_READ,
+            .flags = VM_MAP_REGION_FLAG_PERM_READ, //只读数据段
             .name = "kernel_rodata"
         },
         {
             .phys = SYS_MEM_BASE + ramDataStart - KERNEL_VMM_BASE,
             .virt = ramDataStart,
             .size = ROUNDUP(bssEndBoundary - ramDataStart, MMU_DESCRIPTOR_L2_SMALL_SIZE),
-            .flags = VM_MAP_REGION_FLAG_PERM_READ | VM_MAP_REGION_FLAG_PERM_WRITE,
+            .flags = VM_MAP_REGION_FLAG_PERM_READ | VM_MAP_REGION_FLAG_PERM_WRITE, //可读写数据段
             .name = "kernel_data_bss"
         }
     };
@@ -795,8 +934,9 @@ STATIC VOID OsSetKSectionAttr(VOID)
     UINT32 kmallocLength;
 
     /* use second-level mapping of default READ and WRITE */
-    kSpace->archMmu.virtTtb = (PTE_T *)g_firstPageTable;
+    kSpace->archMmu.virtTtb = (PTE_T *)g_firstPageTable;  
     kSpace->archMmu.physTtb = LOS_PaddrQuery(kSpace->archMmu.virtTtb);
+	//先整体取消内核的内存映射
     status = LOS_ArchMmuUnmap(&kSpace->archMmu, KERNEL_VMM_BASE,
                                (bssEndBoundary - KERNEL_VMM_BASE) >> MMU_DESCRIPTOR_L2_SMALL_SHIFT);
     if (status != ((bssEndBoundary - KERNEL_VMM_BASE) >> MMU_DESCRIPTOR_L2_SMALL_SHIFT)) {
@@ -804,6 +944,8 @@ STATIC VOID OsSetKSectionAttr(VOID)
         return;
     }
 
+	//然后将内核中的内存分成多个段依次映射
+	//映射代码段之前的内存段
     status = LOS_ArchMmuMap(&kSpace->archMmu, KERNEL_VMM_BASE, SYS_MEM_BASE,
                              (textStart - KERNEL_VMM_BASE) >> MMU_DESCRIPTOR_L2_SMALL_SHIFT,
                              VM_MAP_REGION_FLAG_PERM_READ | VM_MAP_REGION_FLAG_PERM_WRITE |
@@ -815,6 +957,7 @@ STATIC VOID OsSetKSectionAttr(VOID)
 
     length = sizeof(mmuKernelMappings) / sizeof(LosArchMmuInitMapping);
     for (i = 0; i < length; i++) {
+		//映射代码段，只读数据段，数据段内存
         kernelMap = &mmuKernelMappings[i];
         status = LOS_ArchMmuMap(&kSpace->archMmu, kernelMap->virt, kernelMap->phys,
                                  kernelMap->size >> MMU_DESCRIPTOR_L2_SMALL_SHIFT, kernelMap->flags);
@@ -825,6 +968,7 @@ STATIC VOID OsSetKSectionAttr(VOID)
         LOS_VmSpaceReserve(kSpace, kernelMap->size, kernelMap->virt);
     }
 
+	//映射内核中数据段结尾之后的内存
     kmallocLength = KERNEL_VMM_BASE + SYS_MEM_SIZE_DEFAULT - bssEndBoundary;
     status = LOS_ArchMmuMap(&kSpace->archMmu, bssEndBoundary,
                              SYS_MEM_BASE + bssEndBoundary - KERNEL_VMM_BASE,
@@ -837,14 +981,16 @@ STATIC VOID OsSetKSectionAttr(VOID)
     LOS_VmSpaceReserve(kSpace, kmallocLength, bssEndBoundary);
 
     /* we need free tmp ttbase */
+	//将一级页表替换成正式的页表
     oldTtPhyBase = OsArmReadTtbr0();
     oldTtPhyBase = oldTtPhyBase & MMU_DESCRIPTOR_L2_SMALL_FRAME;
     OsArmWriteTtbr0(kSpace->archMmu.physTtb | MMU_TTBRx_FLAGS);
     ISB;
 
     /* we changed page table entry, so we need to clean TLB here */
-    OsCleanTLB();
+    OsCleanTLB(); //清空页表缓存
 
+	//释放原页表内存
     (VOID)LOS_MemFree(m_aucSysMem0, (VOID *)(UINTPTR)(oldTtPhyBase - SYS_MEM_BASE + KERNEL_VMM_BASE));
 }
 

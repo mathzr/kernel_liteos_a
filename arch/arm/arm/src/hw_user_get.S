@@ -35,36 +35,54 @@
 .arm
 
 // errno_t _arm_get_user(void *dst, const void *src, size_t dstTypeLen, size_t srcTypeLen)
+//dst内核空间地址，src, 用户空间地址
 FUNCTION(_arm_get_user)
+//将ro, r1, r2, r3, lr寄存器压栈保存
     stmdb   sp!, {r0, r1, r2, r3, lr}
+//dstTypeLen为0则跳转到get_user_return
     cmp     r2, #0
     beq     .Lget_user_return
+//dstTypeLen和srcTypeLen不相等, 则跳转到get_user_err
     cmp     r2, r3
     bne     .Lget_user_err
+//dstTypeLen > 1, 则跳转到get_user_half
     cmp     r2, #1
     bhi     .Lget_user_half
 .Lget_user_byte:
+//dstTypeLen == 1从用户空间拷贝一个字节到内核空间(对应地址为r1到r0)
 0:  ldrbt   r3, [r1], #0
 1:  strb    r3, [r0], #0
+//跳转到get_user_return
     b       .Lget_user_return
 .Lget_user_half:
+//dstTypeLen > 2, 则跳转到get_user_word
     cmp     r2, #2
     bhi     .Lget_user_word
+//dstTypeLen == 2 从用户空间拷贝二个字节到内核空间(对应地址为r1到r0)
 2:  ldrht   r3, [r1], #0
 3:  strh    r3, [r0], #0
+//跳转到get_user_return
     b       .Lget_user_return
 .Lget_user_word:
+//dstTypeLen > 4, 则跳转到get_user_err
     cmp     r2, #4
     bhi     .Lget_user_err
+//dstTypeLen == 4 从用户空间拷贝四个字节到内核空间(对应地址为r1到r0)
 4:  ldrt   r3, [r1], #0
 5:  str    r3, [r0], #0
 .Lget_user_return:
+//从栈里面恢复5个寄存器的值
     ldmia   sp!, {r0, r1, r2, r3, lr}
+//返回值设置成0
     mov     r0, 0
+//返回
     bx      lr
 .Lget_user_err:
+//从栈里面恢复5个寄存器的值
     ldmia   sp!, {r0, r1, r2, r3, lr}
+//返回值设置成-14
     mov     r0, #-14
+//返回
     bx      lr
 
 .pushsection __exc_table, "a"
