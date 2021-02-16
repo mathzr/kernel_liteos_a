@@ -44,9 +44,12 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//内核启动阶段需要分配的内存的起始地址
+//启动阶段堆还没有准备好，采用最简单的办法分配内存
 UINTPTR g_vmBootMemBase = (UINTPTR)&__bss_end;
-BOOL g_kHeapInited = FALSE;
+BOOL g_kHeapInited = FALSE; //内核堆是否初始化
 
+//此地址区间是否一个在合法的内核地址范围内
 UINT32 OsVmAddrCheck(size_t tempAddr, size_t length)
 {
     if ((tempAddr >= KERNEL_VMM_BASE) && ((tempAddr + length) <= (PERIPH_UNCACHED_BASE + PERIPH_UNCACHED_SIZE))) {
@@ -56,37 +59,45 @@ UINT32 OsVmAddrCheck(size_t tempAddr, size_t length)
     return LOS_NOK;
 }
 
+
+//以很简单的方式获取内存
 VOID *OsVmBootMemAlloc(size_t len)
 {
     UINTPTR ptr;
 
     if (g_kHeapInited) {
         VM_ERR("kernel heap has been inited, should not to use boot mem alloc!");
-        return NULL;
+        return NULL;  //如果内核堆已经就绪，那么就不能用这个弱智方法来获取内存了
+        //因为这个方法申请的内存无法释放 :)
     }
 
-    ptr = LOS_Align(g_vmBootMemBase, sizeof(UINTPTR));
-    g_vmBootMemBase = ptr + LOS_Align(len, sizeof(UINTPTR));
+    ptr = LOS_Align(g_vmBootMemBase, sizeof(UINTPTR));  //返回的内存块首地址对齐于指针变量
+    g_vmBootMemBase = ptr + LOS_Align(len, sizeof(UINTPTR)); //把这块内存切割出去
 
-    return (VOID *)ptr;
+    return (VOID *)ptr;  //返回申请到的内存
 }
 
+
+//系统内存初始化
 UINT32 OsSysMemInit(VOID)
 {
     STATUS_T ret;
 
-    OsKSpaceInit();
+    OsKSpaceInit();  //初始化内核地址空间
 
+	//初始化内核堆空间
     ret = OsKHeapInit(OS_KHEAP_BLOCK_SIZE);
     if (ret != LOS_OK) {
         VM_ERR("OsKHeapInit fail");
         return LOS_NOK;
     }
 
+	//内核物理页相关的初始化
     OsVmPageStartup();
+	//内存映射相关的初始化
     OsInitMappingStartUp();
 
-    ret = ShmInit();
+    ret = ShmInit(); //共享内存相关的初始化
     if (ret < 0) {
         VM_ERR("ShmInit fail");
         return LOS_NOK;

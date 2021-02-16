@@ -42,6 +42,8 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+
+//将设备物理地址转换成设备虚拟地址(IO)
 VOID *ioremap(PADDR_T paddr, unsigned long size)
 {
     if (IS_PERIPH_ADDR(paddr) && IS_PERIPH_ADDR(paddr + size)) {
@@ -54,6 +56,7 @@ VOID *ioremap(PADDR_T paddr, unsigned long size)
 
 VOID iounmap(VOID *vaddr) {}
 
+//将设备/MEM物理地址转换成no cache型设备虚拟地址
 VOID *ioremap_nocache(PADDR_T paddr, unsigned long size)
 {
     if (IS_PERIPH_ADDR(paddr) && IS_PERIPH_ADDR(paddr + size)) {
@@ -68,6 +71,8 @@ VOID *ioremap_nocache(PADDR_T paddr, unsigned long size)
     return (VOID *)(UINTPTR)paddr;
 }
 
+
+//将设备/mem物理地址转换成cache类型虚拟地址
 VOID *ioremap_cached(PADDR_T paddr, unsigned long size)
 {
     if (IS_PERIPH_ADDR(paddr) && IS_PERIPH_ADDR(paddr + size)) {
@@ -89,8 +94,8 @@ int remap_pfn_range(VADDR_T vaddr, unsigned long pfn, unsigned long size, unsign
     LosVmMapRegion *region = NULL;
     unsigned long vpos;
     unsigned long end;
-    unsigned long paddr = pfn << PAGE_SHIFT;
-    LosVmSpace *space = LOS_SpaceGet(vaddr);
+    unsigned long paddr = pfn << PAGE_SHIFT; //通过物理页编号获取物理页地址
+    LosVmSpace *space = LOS_SpaceGet(vaddr); //通过虚拟地址获取地址空间
 
     if (size == 0) {
         VM_ERR("invalid map size %u", size);
@@ -98,19 +103,19 @@ int remap_pfn_range(VADDR_T vaddr, unsigned long pfn, unsigned long size, unsign
     }
     size = ROUNDUP(size, PAGE_SIZE);
 
-    if (!IS_PAGE_ALIGNED(vaddr) || pfn == 0) {
+    if (!IS_PAGE_ALIGNED(vaddr) || pfn == 0) { //虚拟地址需要页对齐，0号内存页不能用来映射
         VM_ERR("invalid map map vaddr %x or pfn %x", vaddr, pfn);
         return LOS_ERRNO_VM_INVALID_ARGS;
     }
 
-    if (space == NULL) {
+    if (space == NULL) {  //地址空间不存在
         VM_ERR("aspace not exists");
         return LOS_ERRNO_VM_NOT_FOUND;
     }
 
     (VOID)LOS_MuxAcquire(&space->regionMux);
 
-    region = LOS_RegionFind(space, vaddr);
+    region = LOS_RegionFind(space, vaddr);   //在地址空间中寻找虚拟地址对应的内存区
     if (region == NULL) {
         VM_ERR("region not exists");
         status = LOS_ERRNO_VM_NOT_FOUND;
@@ -118,6 +123,7 @@ int remap_pfn_range(VADDR_T vaddr, unsigned long pfn, unsigned long size, unsign
     }
     end = vaddr + size;
     if (region->range.base + region->range.size < end) {
+		//需要映射的虚拟地址范围不能跨越内存区
         VM_ERR("out of range:base=%x size=%d vaddr=%x len=%u",
                region->range.base, region->range.size, vaddr, size);
         status = LOS_ERRNO_VM_INVALID_ARGS;
@@ -126,6 +132,7 @@ int remap_pfn_range(VADDR_T vaddr, unsigned long pfn, unsigned long size, unsign
 
     /* check */
     for (vpos = vaddr; vpos < end; vpos += PAGE_SIZE) {
+		//这个虚拟地址范围中，是否有内存页已经映射过
         status = LOS_ArchMmuQuery(&space->archMmu, (VADDR_T)vpos, NULL, NULL);
         if (status == LOS_OK) {
             VM_ERR("remap_pfn_range, address mapping already exist");
@@ -135,6 +142,7 @@ int remap_pfn_range(VADDR_T vaddr, unsigned long pfn, unsigned long size, unsign
     }
 
     /* map all */
+	//上述虚拟地址还没有映射到物理内存，这里一次性映射完毕
     ret = LOS_ArchMmuMap(&space->archMmu, vaddr, paddr, size >> PAGE_SHIFT, prot);
     if (ret <= 0) {
         VM_ERR("ioremap LOS_ArchMmuMap failed err = %d", ret);
@@ -161,23 +169,27 @@ VOID *LOS_DmaMemAlloc(DMA_ADDR_T *dmaAddr, size_t size, size_t align, enum DmaMe
         return NULL;
     }
 
-    kVaddr = LOS_KernelMallocAlign(size, align);
+    kVaddr = LOS_KernelMallocAlign(size, align); //申请内核空间的内存
     if (kVaddr == NULL) {
         VM_ERR("failed, size = %u, align = %u", size, align);
         return NULL;
     }
 
     if (dmaAddr != NULL) {
+		//转换成物理地址,并记录下来
         *dmaAddr = (DMA_ADDR_T)LOS_PaddrQuery(kVaddr);
     }
 
     if (type == DMA_NOCACHE) {
+		//对虚拟地址做一个转换(uncache 版本)
         kVaddr = (VOID *)VMM_TO_UNCACHED_ADDR((UINTPTR)kVaddr);
     }
 
     return kVaddr;
 }
 
+
+//释放DMA内存
 VOID LOS_DmaMemFree(VOID *vaddr)
 {
     UINTPTR addr;
@@ -188,16 +200,18 @@ VOID LOS_DmaMemFree(VOID *vaddr)
     addr = (UINTPTR)vaddr;
 
     if ((addr >= UNCACHED_VMM_BASE) && (addr < UNCACHED_VMM_BASE + UNCACHED_VMM_SIZE)) {
-        addr = UNCACHED_TO_VMM_ADDR(addr);
-        LOS_KernelFree((VOID *)addr);
+        addr = UNCACHED_TO_VMM_ADDR(addr); //转换回内核内存地址
+        LOS_KernelFree((VOID *)addr);  //释放内存
     } else if ((addr >= KERNEL_VMM_BASE) && (addr < KERNEL_VMM_BASE + KERNEL_VMM_SIZE)) {
-        LOS_KernelFree((VOID *)addr);
+        LOS_KernelFree((VOID *)addr); //释放内存
     } else {
         VM_ERR("addr %#x not in dma area!!!", vaddr);
     }
     return;
 }
 
+
+//DMA虚拟地址转换成物理地址
 DMA_ADDR_T LOS_DmaVaddrToPaddr(VOID *vaddr)
 {
     status_t ret;
