@@ -217,7 +217,7 @@ UINT32 OsArmSharedPageFault(UINT32 excType, ExcContext *frame, UINT32 far, UINT3
     BOOL write = FALSE;
 
     if (OsGetSystemStatus() == OS_SYSTEM_EXC_CURR_CPU) {
-        return LOS_ERRNO_VM_NOT_FOUND; //只能取其它CPU的异常信息，因为自己已经无法执行了
+        return LOS_ERRNO_VM_NOT_FOUND; //当前CPU无法继续执行程序
     }
 
     if (excType == OS_EXCEPT_PREFETCH_ABORT) {
