@@ -198,7 +198,7 @@ STATIC VOID OsVmPhysFreeListAdd(LosVmPage *page, UINT8 order)
     seg = &g_vmPhysSeg[page->segID]; //对应的物理内存段
 
     list = &seg->freeList[order];
-    LOS_ListTailInsert(&list->node, &page->node); //放入响应的空闲队列
+    LOS_ListTailInsert(&list->node, &page->node); //放入相应的空闲队列
     list->listCnt++; //并增加计数
 }
 
@@ -267,7 +267,9 @@ STATIC VOID OsVmPhysPagesSpiltUnsafe(LosVmPage *page, UINT8 oldOrder, UINT8 newO
     for (order = newOrder; order > oldOrder;) {
         order--;
         buddyPage = &page[VM_ORDER_TO_PAGES(order)];  //一分为二以后，将后半部分存入空闲队列
-        LOS_ASSERT(buddyPage->order == VM_LIST_ORDER_MAX);  //现在还未在空闲队列中
+        //对于空闲内存页列表，只有首页的描述符的order才有实际值，其它页的order都是VM_LIST_ORDER_MAX
+        //由于我们都是留下后半部分，所以这些内存页的order值都是VM_LIST_ORDER_MAX
+        LOS_ASSERT(buddyPage->order == VM_LIST_ORDER_MAX);  
         OsVmPhysFreeListAddUnsafe(buddyPage, order); //存入空闲队列
     }
 	//直到(order == oldOrder)，即page, oldOrder相关的连续内存还在占用
@@ -488,7 +490,7 @@ VOID LOS_PhysPagesFreeContiguous(VOID *ptr, size_t nPages)
         VM_ERR("vm page of ptr(%#x) is null", ptr);
         return;
     }
-    page->nPages = 0;  //通过此字段置0来描述不再使用这个内存页列表
+    page->nPages = 0;  //通过此字段置0来描述释放后不再作为连续内存页的起始页
 
     seg = &g_vmPhysSeg[page->segID];
     LOS_SpinLockSave(&seg->freeListLock, &intSave);

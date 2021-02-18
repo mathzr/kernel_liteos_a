@@ -43,14 +43,31 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
-typedef struct VmPage {
+//可用来描述一个物理内存页，
+//也可以用来描述连续的物理内存页的首页
+//当描述连续物理内存页的首页是，nPages的值大于1
+typedef struct VmPage {	
+	//将此物理内存页放入某链表(某LRU链表)
+	//或者某空闲链表，
     LOS_DL_LIST         node;        /**< vm object dl list */
+	
     UINT32              index;       /**< vm page index to vm object */
+	//此物理页的起始地址(物理地址)
     PADDR_T             physAddr;    /**< vm page physical addr */
+	//此物理内存页的引用计数，
+	//一般和LOS_ArchMmuMap成对使用，表示某个虚拟内存页映射到此物理内存页上
+	
     Atomic              refCounts;   /**< vm page ref count */
+	
     UINT32              flags;       /**< vm page flags */
+	// 在order >= 0时，表示从本页开始连续pow(2, order)页都空闲，为一个整体
+	// 但是order == VM_LIST_ORDER_MAX表示此内存页不空闲，或者不是空闲内存块的首页
     UINT8               order;       /**< vm page in which order list */
+
+	//本物理内存页所在的物理内存段的编号
     UINT8               segID;       /**< the segment id of vm page */
+
+	//当申请连续的物理内存页时，在第一页的描述符中写入下列字段，>=1, 表示连续的内存页数目
     UINT16              nPages;      /**< the vm page is used for kernel heap */
 } LosVmPage;
 

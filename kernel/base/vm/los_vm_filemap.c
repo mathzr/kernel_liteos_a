@@ -34,6 +34,8 @@
  * @ingroup kernel
  */
 
+//虚拟内存文件映射相关的处理逻辑
+
 #include "los_vm_filemap.h"
 #include "los_vm_page.h"
 #include "los_vm_phys.h"
@@ -129,39 +131,47 @@ VOID OsDeletePageCacheLru(LosFilePage *page)
     OsPageCacheDel(page);
 }
 
+
+//获取文件内存页缓存，并填入文件的内容
 STATIC LosFilePage *OsPagecacheGetPageAndFill(struct file *filp, VM_OFFSET_T pgOff, size_t *readSize, VADDR_T *kvaddr)
 {
     LosFilePage *page = NULL;
     struct page_mapping *mapping = filp->f_mapping;
 
-    page = OsFindGetEntry(mapping, pgOff);
+    page = OsFindGetEntry(mapping, pgOff); //查询页缓存是否已存在
     if (page != NULL) {
-        OsSetPageLocked(page->vmPage);
-        OsPageRefIncLocked(page);
-        *kvaddr = (VADDR_T)(UINTPTR)OsVmPageToVaddr(page->vmPage);
-        *readSize = PAGE_SIZE;
+		//页缓存已存在
+        OsSetPageLocked(page->vmPage); //先锁住物理页
+        OsPageRefIncLocked(page); //增加页缓存的引用计数
+        *kvaddr = (VADDR_T)(UINTPTR)OsVmPageToVaddr(page->vmPage);  //获取物理页的内核虚拟地址
+        *readSize = PAGE_SIZE;  //读取的字节数为一页
     } else {
+		//页缓存不存在，申请新的页缓存
         page = OsPageCacheAlloc(mapping, pgOff);
         if (page == NULL) {
             VM_ERR("Failed to alloc a page frame");
             return page;
         }
-        OsSetPageLocked(page->vmPage);
-        *kvaddr = (VADDR_T)(UINTPTR)OsVmPageToVaddr(page->vmPage);
+        OsSetPageLocked(page->vmPage); //先锁住物理页
+        *kvaddr = (VADDR_T)(UINTPTR)OsVmPageToVaddr(page->vmPage); //获取物理页的内核虚拟地址
 
-        file_seek(filp, pgOff << PAGE_SHIFT, SEEK_SET);
+        file_seek(filp, pgOff << PAGE_SHIFT, SEEK_SET); //调整文件指针到合理的位置
         /* "ReadPage" func exists definitely in this procedure */
+		//将文件中的数据读入此页缓存
         *readSize = filp->f_inode->u.i_mops->readpage(filp, (char *)(UINTPTR)*kvaddr, PAGE_SIZE);
         if (*readSize == 0) {
             VM_ERR("read 0 bytes");
             OsCleanPageLocked(page->vmPage);
         }
+		//将页缓存放入文件的页缓存链表
         OsAddToPageacheLru(page, mapping, pgOff);
     }
 
-    return page;
+    return page;  //返回页缓存描述符
 }
 
+
+//从文件中读入数据
 ssize_t OsMappingRead(struct file *filp, char *buf, size_t size)
 {
     INT32 ret;
@@ -172,50 +182,55 @@ ssize_t OsMappingRead(struct file *filp, char *buf, size_t size)
     size_t readTotal = 0;
     size_t readLeft = size;
     LosFilePage *page = NULL;
-    VM_OFFSET_T pos = file_seek(filp, 0, SEEK_CUR);
-    VM_OFFSET_T pgOff = pos >> PAGE_SHIFT;
-    INT32 offInPage = pos % PAGE_SIZE;
-    struct page_mapping *mapping = filp->f_mapping;
+    VM_OFFSET_T pos = file_seek(filp, 0, SEEK_CUR);  //获取本次读取的开始位置
+    VM_OFFSET_T pgOff = pos >> PAGE_SHIFT; //判断其所在的文件内部内存页偏移
+    INT32 offInPage = pos % PAGE_SIZE; //页内字节偏移
+    struct page_mapping *mapping = filp->f_mapping;  //此文件的内存页列表
+    //需要读取的内存页数目
     INT32 nPages = (ROUNDUP(pos + size, PAGE_SIZE) - ROUNDDOWN(pos, PAGE_SIZE)) >> PAGE_SHIFT;
 
-    ret = stat(filp->f_path, &bufStat);
+    ret = stat(filp->f_path, &bufStat); //获取文件的属性
     if (ret != OK) {
         VM_ERR("Get file size failed. (filepath=%s)", filp->f_path);
         return 0;
     }
 
-    if (pos >= bufStat.st_size) {
+    if (pos >= bufStat.st_size) { //当前读取位置超越了文件大小，读不到数据
         PRINT_INFO("%s filp->f_pos >= bufStat.st_size (pos=%ld, fileSize=%ld)\n", filp->f_path, pos, bufStat.st_size);
         return 0;
     }
 
     LOS_SpinLockSave(&mapping->list_lock, &intSave);
 
+	//逐页读取，直到读完所有页，或者缓存满
     for (INT32 i = 0; (i < nPages) && readLeft; i++, pgOff++) {
+		//获取一页内存，并将数据读入这页内存
         page = OsPagecacheGetPageAndFill(filp, pgOff, &readSize, &kvaddr);
         if ((page == NULL) || (readSize == 0)) {
-            break;
+            break; //读失败，则返回
         }
         if (readSize < PAGE_SIZE) {
-            readLeft = readSize;
+            readLeft = readSize;  //最后一次可能无法读完一页
         }
 
+		//最开始读到的数据不需要从页起始位置拷贝，而应该从页内offInPage位置拷贝
         readSize = MIN2((PAGE_SIZE - offInPage), readLeft);
 
+		//拷贝读到的数据到输出缓冲区
         (VOID)memcpy_s((VOID *)buf, readLeft, (char *)kvaddr + offInPage, readSize);
-        buf += readSize;
-        readLeft -= readSize;
-        readTotal += readSize;
+        buf += readSize; //下一次拷贝的目标位置
+        readLeft -= readSize; //输出缓冲区的剩余尺寸
+        readTotal += readSize; //当前输出到缓冲区的字节总数目
 
-        offInPage = 0;
+        offInPage = 0; //从第2页开始，都是从每页的最开始读取
 
-        OsCleanPageLocked(page->vmPage);
+        OsCleanPageLocked(page->vmPage); //OsPagecacheGetPageAndFill中锁住了物理页，这里解锁
     }
 
     LOS_SpinUnlockRestore(&mapping->list_lock, intSave);
-    file_seek(filp, pos + readTotal, SEEK_SET);
+    file_seek(filp, pos + readTotal, SEEK_SET);  //修正文件指针的位置，下一次才能正确读取
 
-    return readTotal;
+    return readTotal; //返回成功读入的字节数目
 }
 
 ssize_t OsMappingWrite(struct file *filp, const char *buf, size_t size)

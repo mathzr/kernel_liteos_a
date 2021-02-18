@@ -43,7 +43,7 @@ extern "C" {
 
 //物理内存页描述符数组
 LosVmPage *g_vmPageArray = NULL;
-//上述数组的尺寸
+//上述数组的尺寸,单位字节。每个物理内存页对应一个表项
 size_t g_vmPageArraySize;
 
 
