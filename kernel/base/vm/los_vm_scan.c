@@ -57,7 +57,7 @@ VOID OsUnmapAllLocked(LosFilePage *page)
     LosMapInfo *next = NULL;
     LOS_DL_LIST *immap = &page->i_mmap;
 
-	//遍历某内存页的文件映射
+	//遍历某内存页的地址映射
     LOS_DL_LIST_FOR_EACH_ENTRY_SAFE(info, next, immap, LosMapInfo, node) {
         OsUnmapPageLocked(page, info); //依次取消映射
     }

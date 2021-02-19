@@ -49,17 +49,29 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//文件页缓存描述结构
 typedef struct FilePage {
-    LOS_DL_LIST             node;
-    LOS_DL_LIST             lru;
+    LOS_DL_LIST             node;  //将同一个文件的缓存页连接起来
+    LOS_DL_LIST             lru;   //存入active或者inactive的LRU链表，用于指导回收
+    //此文件页缓存关联的mmap列表
     LOS_DL_LIST             i_mmap;       /* list of mappings */
+	//i_mmap链表的长度
     UINT32                  n_maps;       /* num of mapping */
+	//此文件页缓存所属的内存段
     struct VmPhysSeg        *physSeg;      /* physical memory that file page belongs to */
+	//此文件页缓存实际使用的物理内存页
     struct VmPage           *vmPage;
+	//此文件页缓存属于哪个文件映射
     struct page_mapping     *mapping;
+	//属于文件内的第几页
     VM_OFFSET_T             pgoff;
+	
     UINT32                  flags;
+
+	//脏数据页内起始位置
     UINT16                  dirtyOff;
+
+	//脏数据页内结束位置(不含)
     UINT16                  dirtyEnd;
 } LosFilePage;
 
