@@ -70,10 +70,12 @@ void *SysBrk(void *addr)
     return LOS_DoBrk(addr);
 }
 
+//创建共享内存，返回共享内存ID
 int SysShmGet(key_t key, size_t size, int shmflg)
 {
     int ret;
 
+	//创建共享内存
     ret = ShmGet(key, size, shmflg);
     if (ret < 0) {
         return -get_errno();
