@@ -71,7 +71,7 @@ typedef struct VmFault {
     UINT32          flags;              /* FAULT_FLAG_xxx flags */
 	//产生异常的逻辑页编号
     unsigned long   pgoff;              /* Logical page offset based on region */
-	//产生异常的虚拟地址，逻辑页首地址
+	//产生异常的虚拟地址
     VADDR_T         vaddr;              /* Faulting virtual address */
 	//产生异常的内存页对应的内核虚拟地址
     VADDR_T         *pageKVaddr;        /* KVaddr of pagefault's vm page's paddr */
@@ -85,32 +85,37 @@ struct VmFileOps {
     void (*remove)(struct VmMapRegion *region, LosArchMmu *archMmu, VM_OFFSET_T offset);
 };
 
+//用于描述虚拟地址空间中
+//某一个区域
 struct VmMapRegion {
 	//内存区域对应的红黑树节点
     LosRbNode           rbNode;         /**< region red-black tree node */
 	//此内存区域所属的内存空间
     LosVmSpace          *space;
-	//
+	//暂未使用
     LOS_DL_LIST         node;           /**< region dl list */
 	//此内存区域覆盖的虚拟地址范围
     LosVmMapRange       range;          /**< region address range */
 	//此内存区域对应的页偏移，特别是映射到文件的时候
+	//因为可以将文件的一部分映射到本内存区，详细见mmap
     VM_OFFSET_T         pgOff;          /**< region page offset to file */
 	//此内存区域的某些属性
     UINT32              regionFlags;   /**< region flags: cow, user_wired */
-	//做为共享内存时，共享内存的ID
+	//本内存区做为共享内存时，所对应的共享内存ID。
     UINT32              shmid;          /**< shmid about shared region */
 	//此内存区域的读写权限属性
     UINT8               protectFlags;   /**< vm region protect flags: PROT_READ, PROT_WRITE, */
 	//此内存区域的克隆属性
     UINT8               forkFlags;      /**< vm space fork flags: COPY, ZERO, */
-	//此内存区域的类型，匿名映射，文件映射，设备内存
+	//此内存区域的类型，匿名映射，文件映射，设备内存。这3种映射类型主要来源于mmap调用
+	//栈内存区域也是匿名映射
+	//也有内存区域没有映射类型，如堆内存区域，代码区域
     UINT8               regionType;     /**< vm region type: ANON, FILE, DEV */
     union {
-        struct VmRegionFile {
+        struct VmRegionFile { //mmap映射到文件时的相关信息
             unsigned int fileMagic;  //文件魔数
             struct file *file; //映射的文件
-            const LosVmFileOps *vmFOps;  //支持的文件操作
+            const LosVmFileOps *vmFOps;  //此内存区支持的与文件映射相关的操作
         } rf;  //文件映射
         struct VmRegionAnon {
             LOS_DL_LIST  node;          /**< region LosVmPage list */
@@ -125,29 +130,39 @@ struct VmMapRegion {
 
 //定义一个虚拟地址空间
 typedef struct VmSpace {
-	//将若干个虚拟地址空间链接起来
+	//将系统中所有虚拟地址空间链接起来
     LOS_DL_LIST         node;           /**< vm space dl list */
-	//每个地址空间有若干个内存区
+	
+	//每个地址空间有若干个内存区，暂时没有使用，使用红黑树组织内存区了
     LOS_DL_LIST         regions;        /**< region dl list */
+	
 	//将这些内存区也组织在红黑树中
     LosRbTree           regionRbTree;   /**< region red-black tree root */
-	//红黑树保护锁
+	
+	//内存区操作的互斥锁
     LosMux              regionMux;      /**< region list mutex lock */
+	
 	//地址空间起始地址
     VADDR_T             base;           /**< vm space base addr */
 	//地址空间尺寸
     UINT32              size;           /**< vm space size */
-	//地址空间堆起始地址
+	
+	//堆起始地址，在[base, base+size)内
     VADDR_T             heapBase;       /**< vm space heap base address */
-	//地址空间堆尺寸
+	//堆当前位置，随brk调用变化
     VADDR_T             heapNow;        /**< vm space heap base now */
-	//地址空间堆区
+	
+	//堆所使用的内存区，首次调用brk的时候创建
     LosVmMapRegion      *heap;          /**< heap region */
-	//地址空间映射区首地址
+	
+	//映射区首地址，在[base, base+size)之内
+	//对于用户态进程来说，heap和map是互斥的，不能重叠
+	//这个区域主要用来分配内存区的(region),堆区是预先分配的内存区，不含在这里面
     VADDR_T             mapBase;        /**< vm space mapping area base */
-	//地址空间映射区尺寸
+	//映射区尺寸
     UINT32              mapSize;        /**< vm space mapping area size */
-	//与本地址空间页表相关的数据
+	
+	//物理内存相关信息
     LosArchMmu          archMmu;        /**< vm mapping physical memory */
 #ifdef LOSCFG_DRIVERS_TZDRIVER
 	//代码起始地址
@@ -181,7 +196,9 @@ typedef struct VmSpace {
 #define     VM_MAP_REGION_FLAG_PRIVATE              (1<<8) //私有区
 #define     VM_MAP_REGION_FLAG_FLAG_MASK            (3<<7)
 #define     VM_MAP_REGION_FLAG_STACK                (1<<9) //栈
-#define     VM_MAP_REGION_FLAG_HEAP                 (1<<10) //堆
+
+//每个进程有一个堆空间
+#define     VM_MAP_REGION_FLAG_HEAP                 (1<<10) 
 #define     VM_MAP_REGION_FLAG_DATA                 (1<<11) //数据
 #define     VM_MAP_REGION_FLAG_TEXT                 (1<<12) //代码
 #define     VM_MAP_REGION_FLAG_BSS                  (1<<13) //未初始化数据

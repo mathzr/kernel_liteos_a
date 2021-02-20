@@ -208,7 +208,7 @@ VOID *LOS_DoBrk(VOID *addr)
         goto REGION_ALLOC_FAILED;
     }
     if (space->heapBase == space->heapNow) {
-		//在空堆上新增堆空间，先初始化堆，申请一个内存区
+		//首次调用brk时，创建一个内存区用于堆使用
         region = LOS_RegionAlloc(space, space->heapBase, size,
                                  VM_MAP_REGION_FLAG_PERM_READ | VM_MAP_REGION_FLAG_PERM_WRITE |
                                  VM_MAP_REGION_FLAG_PERM_USER, 0);
