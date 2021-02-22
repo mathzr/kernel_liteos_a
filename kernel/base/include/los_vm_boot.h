@@ -47,14 +47,15 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//内核堆空间尺寸
 #define OS_KHEAP_BLOCK_SIZE                 (512 * 1024UL)
 
 typedef struct ArchMmuInitMapping {
-    PADDR_T phys;
-    VADDR_T virt;
-    size_t  size;
-    unsigned int flags;
-    const char *name;
+    PADDR_T phys; //需要映射的物理地址
+    VADDR_T virt; //需要映射的虚拟地址
+    size_t  size; //需要映射的字节数目
+    unsigned int flags; //主要是权限标志(读/写/执行)
+    const char *name; //此段内存的名称
 } LosArchMmuInitMapping;
 
 extern UINTPTR g_vmBootMemBase;

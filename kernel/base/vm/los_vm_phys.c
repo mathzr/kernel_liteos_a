@@ -158,7 +158,7 @@ STATIC INLINE VOID OsVmPhysFreeListInit(struct VmPhysSeg *seg)
     LOS_SpinInit(&seg->freeListLock);
 
     LOS_SpinLockSave(&seg->freeListLock, &intSave);
-    for (i = 0; i < VM_LIST_ORDER_MAX; i++) {
+    for (i = 0; i < VM_LIST_ORDER_MAX; i++) { //各种粒度的连续空闲内存页所在的空闲链表
         list = &seg->freeList[i];
         LOS_ListInit(&list->node);  
         list->listCnt = 0;  //每个空闲队列当前都还没有存入空闲内存页
@@ -174,10 +174,10 @@ VOID OsVmPhysInit(VOID)
     UINT32 nPages = 0;
     int i;
 
-	//针对物理内存中的每一段内存进行初始化
+	//针对物理内存中的每一段内存进行初始化，实际上就1段
     for (i = 0; i < g_vmPhysSegNum; i++) {
         seg = &g_vmPhysSeg[i];
-        seg->pageBase = &g_vmPageArray[nPages]; //本内存段的物理页表描述符起始地址
+        seg->pageBase = &g_vmPageArray[nPages]; //本内存段的物理页表描述符起始地址，已经排除了页表占用的内存
         nPages += seg->size >> PAGE_SHIFT;  //本内存段占用的物理页数目
         OsVmPhysFreeListInit(seg);  //初始化管理连续物理内存页的空闲链表
         OsVmPhysLruInit(seg); //初始化各种已使用物理页的LRU链表

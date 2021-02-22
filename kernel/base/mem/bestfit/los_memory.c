@@ -2944,23 +2944,25 @@ STATUS_T OsKHeapInit(size_t size)
      * should page mapping, remaining region should section mapping. so the boundary should be
      * MB aligned.
      */
-    UINTPTR end = ROUNDUP(g_vmBootMemBase + size, MB);
-    size = end - g_vmBootMemBase;
+     //在代码和全局数据区结束后，即为堆空间，堆的结尾地址选择1M字节对齐，这样方便后面的内存映射到1级页表
+    UINTPTR end = ROUNDUP(g_vmBootMemBase + size, MB); //堆结尾地址
+    size = end - g_vmBootMemBase;  //内核堆空间总大小
 
-    ptr = OsVmBootMemAlloc(size);
+    ptr = OsVmBootMemAlloc(size);  //堆空间内存块
     if (!ptr) {
         PRINT_ERR("vmm_kheap_init boot_alloc_mem failed! %d\n", size);
         return -1;
     }
 
+	//记录内核堆空间起始地址
     m_aucSysMem0 = m_aucSysMem1 = ptr;
-    ret = LOS_MemInit(m_aucSysMem0, size);
+    ret = LOS_MemInit(m_aucSysMem0, size); //初始化内核堆空间
     if (ret != LOS_OK) {
         PRINT_ERR("vmm_kheap_init LOS_MemInit failed!\n");
         g_vmBootMemBase -= size;
         return ret;
     }
-    LOS_MemExpandEnable(OS_SYS_MEM_ADDR);
+    LOS_MemExpandEnable(OS_SYS_MEM_ADDR); //TBD
     return LOS_OK;
 }
 

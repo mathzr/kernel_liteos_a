@@ -49,14 +49,14 @@ extern "C" {
 UINTPTR g_vmBootMemBase = (UINTPTR)&__bss_end;
 BOOL g_kHeapInited = FALSE; //内核堆是否初始化
 
-//此地址区间是否一个在合法的内核地址范围内
+//此地址区间是否一个合法的内核区间
 UINT32 OsVmAddrCheck(size_t tempAddr, size_t length)
 {
     if ((tempAddr >= KERNEL_VMM_BASE) && ((tempAddr + length) <= (PERIPH_UNCACHED_BASE + PERIPH_UNCACHED_SIZE))) {
-        return LOS_OK;
+        return LOS_OK; //合法
     }
 
-    return LOS_NOK;
+    return LOS_NOK; //不合法
 }
 
 
@@ -71,7 +71,8 @@ VOID *OsVmBootMemAlloc(size_t len)
         //因为这个方法申请的内存无法释放 :)
     }
 
-    ptr = LOS_Align(g_vmBootMemBase, sizeof(UINTPTR));  //返回的内存块首地址对齐于指针变量
+	//每次获取的内存块首地址对齐于指针变量长度
+    ptr = LOS_Align(g_vmBootMemBase, sizeof(UINTPTR));  
     g_vmBootMemBase = ptr + LOS_Align(len, sizeof(UINTPTR)); //把这块内存切割出去
 
     return (VOID *)ptr;  //返回申请到的内存

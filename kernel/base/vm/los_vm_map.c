@@ -139,7 +139,7 @@ STATIC BOOL OsVmSpaceInitCommon(LosVmSpace *vmSpace, VADDR_T *virtTtb)
 	//初始化地址空间中存储内存区的红黑树,指定3个操作函数
     LOS_RbInitTree(&vmSpace->regionRbTree, OsRegionRbCmpKeyFn, OsRegionRbFreeFn, OsRegionRbGetKeyFn);
 
-	//初始化内存区链表
+	//初始化内存区链表，目前这个链表无啥作用
     LOS_ListInit(&vmSpace->regions);
 	//初始化访问内存区的互斥锁
     status_t retval = LOS_MuxInit(&vmSpace->regionMux, NULL);

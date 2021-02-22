@@ -304,7 +304,7 @@ status_t OsDoSharedFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
 		//查找此内存区域对应的引起写异常的文件页
         fpage = OsFindGetEntry(region->unTypeData.rf.file->f_mapping, vmPgFault->pgoff);
         if (fpage) {
-			//将文件页标记成脏页
+			//将文件页标记成脏页，上次写异常，所以本次需要触发再次写操作
             OsMarkPageDirty(fpage, region, 0, 0);
         }
         LOS_SpinUnlockRestore(&region->unTypeData.rf.file->f_mapping->list_lock, intSave);

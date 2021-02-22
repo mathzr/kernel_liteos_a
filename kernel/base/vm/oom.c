@@ -130,7 +130,7 @@ LITE_OS_SEC_TEXT_MINOR STATIC BOOL OomReclaimPageCache(VOID)
         break;
     }
 
-    return isReclaimMemory;  //返回回收的内存页数目
+    return isReclaimMemory;  //返回是否触发了内存回收动作
 }
 
 /*
@@ -153,7 +153,7 @@ LITE_OS_SEC_TEXT_MINOR BOOL OomCheckProcess(VOID)
     /* first we will check if we need to reclaim pagecache memory */
 	//先检查是否需要做页缓存回收，如果需要，做回收动作
     if (OomReclaimPageCache() == FALSE) {
-        goto NO_VICTIM_PROCESS;
+        goto NO_VICTIM_PROCESS; //没有触发回收
     }
 
     /* get free bytes */
@@ -171,7 +171,7 @@ LITE_OS_SEC_TEXT_MINOR BOOL OomCheckProcess(VOID)
 
 NO_VICTIM_PROCESS:
     LOS_SpinUnlock(&g_oomSpinLock);
-    return isLowMemory;
+    return isLowMemory; //返回当前内存是否过低
 }
 
 #ifdef LOSCFG_ENABLE_OOM_LOOP_TASK
@@ -196,7 +196,7 @@ LITE_OS_SEC_TEXT_MINOR VOID OomInfodump(VOID)
 }
 
 
-//设置内存耗尽内存水线
+//设置内存耗尽警告内存水线
 LITE_OS_SEC_TEXT_MINOR VOID OomSetLowMemThreashold(UINT32 lowMemThreshold)
 {
     if ((lowMemThreshold > OOM_DEFAULT_LOW_MEM_THRESHOLD_MAX)) {

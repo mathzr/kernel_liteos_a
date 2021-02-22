@@ -332,7 +332,7 @@ STATIC VOID OsPageCacheUnmap(LosFilePage *fpage, LosArchMmu *archMmu, VADDR_T va
     }
     if (!(OsIsPageMapped(fpage) && ((fpage->flags & VM_MAP_REGION_FLAG_PERM_EXECUTE) ||
         OsIsPageDirty(fpage->vmPage)))) {
-        OsPageRefDecNoLock(fpage);  // TBD
+        OsPageRefDecNoLock(fpage);  //除了脏页或者代码页，应该想办法允许这个内存页回收
     }
 
     LOS_SpinUnlockRestore(&fpage->physSeg->lruLock, intSave);
@@ -650,7 +650,7 @@ INT32 OsVmmFileFault(LosVmMapRegion *region, LosVmPgFault *vmf)
 
     /* share page fault, mark the page dirty */
     if ((vmf->flags & VM_MAP_PF_FLAG_WRITE) && (region->regionFlags & VM_MAP_REGION_FLAG_SHARED)) {
-		//如果是向共享内存写入数据，则需要及时的标记页缓存为脏，//TBD
+		//上一次向共享内存写数据失败，这次标记为脏页以后，后台会重试
         OsMarkPageDirty(fpage, region, 0, 0);
     }
 

@@ -83,14 +83,13 @@ typedef struct MapInfo {
 } LosMapInfo;
 
 enum OsPageFlags {
-    FILE_PAGE_FREE,
-    FILE_PAGE_LOCKED, //此内存页暂时被锁住，禁止回收
-    FILE_PAGE_REFERENCED, //此内存页是否被文件页缓存引用，实际上和ACTIVE一起组合使用
-    //形成2位的二进制数
-    FILE_PAGE_DIRTY, //当前文件页缓存中存在脏数据，需要写回磁盘
-    FILE_PAGE_LRU,
-    FILE_PAGE_ACTIVE,  //此内存页缓存的文件是否在活动链表中
-    FILE_PAGE_SHARED,  //此内存页是否共享内存的一部分
+    FILE_PAGE_FREE, //此内存页现在空闲
+    FILE_PAGE_LOCKED, //将此内存页锁在内存中，不允许回收
+    FILE_PAGE_REFERENCED, //当做为文件页缓存时，此标志主要影响其在active和inactive链表的切换，进一步影响页回收
+    FILE_PAGE_DIRTY, //当内存页做为文件页缓存时，它数据是否需要再次写入文件
+    FILE_PAGE_LRU, //无作用
+    FILE_PAGE_ACTIVE,  //当内存页做为文件页缓存时，它是否在活动链表中
+    FILE_PAGE_SHARED,  //此内存页是否共享内存中的一页
 };
 
 #define PGOFF_MAX                       2000

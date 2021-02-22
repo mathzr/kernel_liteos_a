@@ -53,8 +53,9 @@ extern "C" {
 //检查mmap调用的相关参数
 STATUS_T OsCheckMMapParams(VADDR_T vaddr, unsigned prot, unsigned long flags, size_t len, unsigned long pgoff)
 {
+	//如果用户指定了虚拟地址，那么这个地址必须是用户空间地址
     if ((vaddr != 0) && !LOS_IsUserAddressRange(vaddr, len)) {
-        return -EINVAL; //虚拟地址范围必须是用户空间的地址
+        return -EINVAL; 
     }
 
     if (len == 0) {
@@ -63,13 +64,13 @@ STATUS_T OsCheckMMapParams(VADDR_T vaddr, unsigned prot, unsigned long flags, si
 
     /* we only support some prot and flags */
     if ((prot & PROT_SUPPORT_MASK) == 0) {
-        return -EINVAL;  //有些权限标志位我们不支持
+        return -EINVAL;  //至少必须指明一种权限
     }
     if ((flags & MAP_SUPPORT_MASK) == 0) {
-        return -EINVAL;  //有些标志位我们不支持
+        return -EINVAL;  //至少必须指明1个map flag标志
     }
     if (((flags & MAP_SHARED_PRIVATE) == 0) || ((flags & MAP_SHARED_PRIVATE) == MAP_SHARED_PRIVATE)) {
-        return -EINVAL;
+        return -EINVAL; //share和private必须互斥，2者必居其1
     }
 
     if (((len >> PAGE_SHIFT) + pgoff) < pgoff) {

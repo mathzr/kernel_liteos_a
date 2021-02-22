@@ -36,7 +36,7 @@
 #include "los_vm_filemap.h"
 
 /* unmap a lru page by map record info caller need lru lock */
-//取消某内存页的某个文件映射
+//取消某页缓存的文件映射
 VOID OsUnmapPageLocked(LosFilePage *page, LosMapInfo *info)
 {
     if (page == NULL || info == NULL) {
@@ -57,7 +57,7 @@ VOID OsUnmapAllLocked(LosFilePage *page)
     LosMapInfo *next = NULL;
     LOS_DL_LIST *immap = &page->i_mmap;
 
-	//遍历某内存页的地址映射
+	//遍历某内存页的文件映射
     LOS_DL_LIST_FOR_EACH_ENTRY_SAFE(info, next, immap, LosMapInfo, node) {
         OsUnmapPageLocked(page, info); //依次取消映射
     }
@@ -88,7 +88,7 @@ VOID OsLruCacheDel(LosFilePage *fpage)
     int type = OsIsPageActive(fpage->vmPage) ? VM_LRU_ACTIVE_FILE : VM_LRU_INACTIVE_FILE;
 
     physSeg->lruSize[type]--;  //链表长度减少
-    LOS_ListDelete(&fpage->lru); //移除链表
+    LOS_ListDelete(&fpage->lru); //从链表中移除
 }
 
 //inactive链表是否更短
@@ -123,7 +123,7 @@ STATIC INLINE VOID OsMoveToInactiveList(LosFilePage *fpage)
 }
 
 /* move a page to the most active pos in lru list(active head) */
-//从active链表中其它位置移动到头部
+//从active链表中其它位置移动到头部--其实是尾部
 STATIC INLINE VOID OsMoveToActiveHead(LosFilePage *fpage)
 {
     LosVmPhysSeg *physSeg = fpage->physSeg;
@@ -132,13 +132,14 @@ STATIC INLINE VOID OsMoveToActiveHead(LosFilePage *fpage)
 }
 
 /* move a page to the most active pos in lru list(inactive head) */
-//从inactive链表中其它位置移动到头部
+//从inactive链表中其它位置移动到头部--其实是尾部
 STATIC INLINE VOID OsMoveToInactiveHead(LosFilePage *fpage)
 {
     LosVmPhysSeg *physSeg = fpage->physSeg;
     LOS_ListDelete(&fpage->lru);
     LOS_ListTailInsert(&physSeg->lruList[VM_LRU_INACTIVE_FILE], &fpage->lru);
 }
+
 
 /* page referced add: (call by page cache get)
 ----------inactive----------|----------active------------
@@ -147,7 +148,8 @@ ref:0, act:0 --> ref:1, act:0
 ref:1, act:0 --> ref:0, act:1
 ref:0, act:1 --> ref:1, act:1
 */
-//增加页面引用计数，active状态按上述要求做适当的变更
+//当操作一个已经存在的页缓存前，会调用此函数，表示这个页未来一段时间大概率会使用
+//所以，需要减少其被回收的概率
 VOID OsPageRefIncLocked(LosFilePage *fpage)
 {
     BOOL isOrgActive;
@@ -161,27 +163,31 @@ VOID OsPageRefIncLocked(LosFilePage *fpage)
     LOS_SpinLockSave(&fpage->physSeg->lruLock, &intSave);
 
     page = fpage->vmPage; //内存页
-    isOrgActive = OsIsPageActive(page); //是否活跃的
-
-	//按本函数头部注释中的状态转换表来处理
-    if (OsIsPageReferenced(page) && !OsIsPageActive(page)) {
+    isOrgActive = OsIsPageActive(page); //是否在活动链表中
+	
+    if (OsIsPageReferenced(page) && !OsIsPageActive(page)) {	
+		// act 0, ref 1 --- > act 1, ref 0  目标是移动到活动链表中，减少被回收概率
         OsCleanPageReferenced(page);
         OsSetPageActive(page);
     } else if (!OsIsPageReferenced(page)) {
+		// act 0, ref 0 --- > act 0, ref 1  ---- 离active更近了，再inc就active了
+		// act 1, ref 0 --- > act 1, ref 1		
         OsSetPageReferenced(page);
     }
-
+	// act 1, ref 1 --- > act 1, ref 1
     if (!isOrgActive && OsIsPageActive(page)) {
         /* move inactive to active */
-		//内存页状态从不活跃切换成活跃，需要切换链表
-        OsMoveToActiveList(fpage);
+		// act 0 ----> act 1
+        OsMoveToActiveList(fpage); //减少被回收的机会
     /* no change, move head */
     } else {
-    	//根据状态转换表，不存在从活跃切换回不活跃的过程
-    	//所以剩下的就是状态不变的情况，此时需要将节点移动到自身链表头部
+    	//移动到LRU的尾部这样做的目的是减少被回收的机会
+    	//因为LRU头部的先回收
         if (OsIsPageActive(page)) {
+			// act 1 ---> act 1
             OsMoveToActiveHead(fpage);
         } else {
+        	// act 0 ---> act 0
             OsMoveToInactiveHead(fpage);
         }
     }
@@ -196,7 +202,7 @@ ref:1, act:1 --> ref:0, act:1
 ref:0, act:1 --> ref:1, act:0
 ref:1, act:0 --> ref:0, act:0
 */
-//减少页面引用计数，active状态做适当调整
+//表示近期可能不再使用此内存页，后台可以择机回收
 VOID OsPageRefDecNoLock(LosFilePage *fpage)
 {
     BOOL isOrgActive;
@@ -210,23 +216,29 @@ VOID OsPageRefDecNoLock(LosFilePage *fpage)
     isOrgActive = OsIsPageActive(page);
 
     if (!OsIsPageReferenced(page) && OsIsPageActive(page)) {
+		// act 1, ref 0 --- > act 0, ref 1 增加回收机会
         OsCleanPageActive(page);
         OsSetPageReferenced(page);
     } else if (OsIsPageReferenced(page)) {
+		// act 0, ref 1 --- > act 0, ref 0  回收机会不变
+		// act 1, ref 1 --- > act 1 , ref 0 回收机会增加，再调用一次dec就会进到inactive
         OsCleanPageReferenced(page);
     }
 
     if (isOrgActive && !OsIsPageActive(page)) {
-        OsMoveToInactiveList(fpage);
+        OsMoveToInactiveList(fpage); //增加回收机会
     }
 }
 
+
+//收缩活动链表，将部分页缓存移动到不活动链表
 VOID OsShrinkActiveList(LosVmPhysSeg *physSeg, int nScan)
 {
     LosFilePage *fpage = NULL;
     LosFilePage *fnext = NULL;
     LOS_DL_LIST *activeFile = &physSeg->lruList[VM_LRU_ACTIVE_FILE];
 
+	//遍历活动链表
     LOS_DL_LIST_FOR_EACH_ENTRY_SAFE(fpage, fnext, activeFile, LosFilePage, lru) {
         if (LOS_SpinTrylock(&fpage->mapping->list_lock) != LOS_OK) {
             continue;
@@ -234,18 +246,20 @@ VOID OsShrinkActiveList(LosVmPhysSeg *physSeg, int nScan)
 
         /* happend when caller hold cache lock and try reclaim this page */
         if (OsIsPageLocked(fpage->vmPage)) {
-			//被锁住的内存页不能释放
+			//被锁住的缓存页不能回收
             LOS_SpinUnlock(&fpage->mapping->list_lock);
             continue;
         }
 
         if (OsIsPageMapped(fpage) && (fpage->flags & VM_MAP_REGION_FLAG_PERM_EXECUTE)) {
-			//已经映射且可执行态的内存页不能释放
+			//存放代码的缓存页不能回收
             LOS_SpinUnlock(&fpage->mapping->list_lock);
             continue;
         }
 
-        OsPageRefDecNoLock(fpage); //其他内存页可以做释放动作
+		//其他缓存页可以先移动到不活动链表，为下一步回收做准备
+		//当然，这里不一定会一步到位，多次调用OsPageRefDecNoLock，总会移动到不活动链表
+        OsPageRefDecNoLock(fpage); 
 
         LOS_SpinUnlock(&fpage->mapping->list_lock);
 
@@ -282,20 +296,20 @@ int OsShrinkInactiveList(LosVmPhysSeg *physSeg, int nScan, LOS_DL_LIST *list)
             continue;
         }
 
-		//文件映射的脏页，或者文件映射的可执行页，不参与回收
+		//代码缓存，脏页缓存，不能回收
         if (OsIsPageMapped(fpage) && (OsIsPageDirty(page) || (fpage->flags & VM_MAP_REGION_FLAG_PERM_EXECUTE))) {
             LOS_SpinUnlock(flock);
             continue;
         }
 
-        if (OsIsPageDirty(page)) { //其它脏页
-            ftemp = OsDumpDirtyPage(fpage); //回收filepage, 但不能回收vmpage
+        if (OsIsPageDirty(page)) { //没有文件映射的脏页
+            ftemp = OsDumpDirtyPage(fpage); //回收前先将fpage拷贝一份，然后回收fpage, 但不回收fpage->vmPage
             if (ftemp != NULL) {
                 LOS_ListTailInsert(list, &ftemp->node);  //脏页面的数据还是要待回写，所以还是暂存到队列中
             }
         }
 
-        OsDeletePageCacheLru(fpage); //删除内存页
+        OsDeletePageCacheLru(fpage); //回收内存页
         LOS_SpinUnlock(flock);
         nrReclaimed++;  //增加回收计数
 
@@ -336,11 +350,11 @@ int OsTryShrinkMemory(size_t nPage)
         nPage = VM_FILEMAP_MAX_SCAN;  //最多释放的内存页数目
     }
 
-	//遍历每一个物理内存段
+	//遍历每一个物理内存段，实际上当前就一个内存段
     for (index = 0; index < g_vmPhysSegNum; index++) {
         physSeg = &g_vmPhysSeg[index]; //物理内存段
         LOS_SpinLockSave(&physSeg->lruLock, &intSave);
-		//活动或者不活动的内存页总数
+		//活动或者不活动的页缓存总数
         totalPages = physSeg->lruSize[VM_LRU_ACTIVE_FILE] + physSeg->lruSize[VM_LRU_INACTIVE_FILE];
         if (totalPages < VM_FILEMAP_MIN_SCAN) {
             LOS_SpinUnlockRestore(&physSeg->lruLock, intSave);
@@ -348,7 +362,7 @@ int OsTryShrinkMemory(size_t nPage)
         }
 
         if (InactiveListIsLow(physSeg)) {
-			//不活动页偏少，先尝试切换部分活动页到不活动页
+			//不活动页偏少，先尝试移动部分活动页到不活动页
             OsShrinkActiveList(physSeg, (nPage < VM_FILEMAP_MIN_SCAN) ? VM_FILEMAP_MIN_SCAN : nPage);
         }
 
@@ -362,7 +376,7 @@ int OsTryShrinkMemory(size_t nPage)
     }
 
     LOS_DL_LIST_FOR_EACH_ENTRY_SAFE(fpage, fnext, &dirtyList, LosFilePage, node) {
-        OsDoFlushDirtyPage(fpage);  //将脏页写回永久存储
+        OsDoFlushDirtyPage(fpage);  //将脏页写回文件
     }
 
     return nReclaimed;
@@ -370,7 +384,7 @@ int OsTryShrinkMemory(size_t nPage)
 #else
 int OsTryShrinkMemory(size_t nPage)
 {
-    return 0;
+    return 0;  //没有页缓存的系统，则无回收机制
 }
 #endif
 

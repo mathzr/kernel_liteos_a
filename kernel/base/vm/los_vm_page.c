@@ -47,18 +47,19 @@ LosVmPage *g_vmPageArray = NULL;
 size_t g_vmPageArraySize;
 
 
-//初始化页描述符
+//初始化物理页描述符表项
 STATIC VOID OsVmPageInit(LosVmPage *page, paddr_t pa, UINT8 segID)
 {
-    LOS_ListInit(&page->node); //当前不在链表中
+    LOS_ListInit(&page->node); //当前页不在链表中
     page->flags = FILE_PAGE_FREE; //空闲内存页
-    LOS_AtomicSet(&page->refCounts, 0); //没有模块使用
+    LOS_AtomicSet(&page->refCounts, 0); //现在无人使用
     page->physAddr = pa; //内存页首地址(物理地址)
     page->segID = segID; //此内存页所在的段
-    page->order = VM_LIST_ORDER_MAX; //先设置一个无效值
+    page->order = VM_LIST_ORDER_MAX; //虽然空闲，但不在空闲链表中
 }
 
-//释放连续nPages内存页
+//将物理页数组放入空闲链表。
+//每次放入若干连续内存页
 STATIC INLINE VOID OsVmPageOrderListInit(LosVmPage *page, size_t nPages)
 {
     OsVmPhysPagesFreeContiguous(page, nPages);
@@ -74,7 +75,8 @@ VOID OsVmPageStartup(VOID)
     UINT32 nPage;
     INT32 segID;
 
-	//物理内存中已占用部分先扣除
+	//物理内存中已占用部分先扣除,此时g_vmBootMemBase已经在内核堆空间末尾了，对齐在MB字节位置
+	//剩余部分的物理内存用页表管理起来
     OsVmPhysAreaSizeAdjust(ROUNDUP((g_vmBootMemBase - KERNEL_ASPACE_BASE), PAGE_SIZE));
 
 	//还剩余多少物理内存页
@@ -83,26 +85,28 @@ VOID OsVmPageStartup(VOID)
     g_vmPageArraySize = nPage * sizeof(LosVmPage);
     g_vmPageArray = (LosVmPage *)OsVmBootMemAlloc(g_vmPageArraySize);
 
-	//再次扣除已占用部分
+	//再次扣除页表已占用部分，页表的存储也需要占用几个物理页
+	//剩余的物理内存给后续使用
     OsVmPhysAreaSizeAdjust(ROUNDUP(g_vmPageArraySize, PAGE_SIZE));
 
 	//创建物理地址段，物理地址采用段页式管理，
 	//除了分成多个页，物理内存也分成多个段，共2个维度来描述物理内存
-    OsVmPhysSegAdd();
+    OsVmPhysSegAdd(); //目前系统就一个物理内存段，这个时候段的起始地址已经扣除了页表占用的空间
 
-	//初始化每一个物理地址段
-    OsVmPhysInit();
+	//初始化上述物理内存段，起始地址为第0页内存，依次往后推导
+    OsVmPhysInit(); //以及初始化空闲页和已使用页的相关链表
 
-	//初始化每一个物理地址段中的内存页
+	//初始化每一个物理地址段中的内存页，实际上系统目前就1段
     for (segID = 0; segID < g_vmPhysSegNum; segID++) {
         seg = &g_vmPhysSeg[segID];
         nPage = seg->size >> PAGE_SHIFT;  //本物理地址段含有的内存页数目
         for (page = seg->pageBase, pa = seg->start; page <= seg->pageBase + nPage;
-		//遍历所有的页描述符和实际内存页
+		//遍历所有的页表项
              page++, pa += PAGE_SIZE) {
-            OsVmPageInit(page, pa, segID); //初始化内存页描述符
+            OsVmPageInit(page, pa, segID); //初始页表项
         }
-        OsVmPageOrderListInit(seg->pageBase, nPage); //将所有的内存页存入空闲链(注意空闲链有多个)
+		//将所有的内存页存入空闲链(注意空闲链有多个)
+        OsVmPageOrderListInit(seg->pageBase, nPage); 
     }
 }
 

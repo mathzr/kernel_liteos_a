@@ -56,7 +56,7 @@ VOID *ioremap(PADDR_T paddr, unsigned long size)
 
 VOID iounmap(VOID *vaddr) {}
 
-//将设备/MEM物理地址转换成no cache型设备虚拟地址
+//将设备/MEM物理地址转换成DMA UNCACHE虚拟地址
 VOID *ioremap_nocache(PADDR_T paddr, unsigned long size)
 {
     if (IS_PERIPH_ADDR(paddr) && IS_PERIPH_ADDR(paddr + size)) {
@@ -72,7 +72,7 @@ VOID *ioremap_nocache(PADDR_T paddr, unsigned long size)
 }
 
 
-//将设备/mem物理地址转换成cache类型虚拟地址
+//将设备/mem物理地址转换成DMA cache类型虚拟地址
 VOID *ioremap_cached(PADDR_T paddr, unsigned long size)
 {
     if (IS_PERIPH_ADDR(paddr) && IS_PERIPH_ADDR(paddr + size)) {
@@ -101,7 +101,7 @@ int remap_pfn_range(VADDR_T vaddr, unsigned long pfn, unsigned long size, unsign
         VM_ERR("invalid map size %u", size);
         return LOS_ERRNO_VM_INVALID_ARGS;
     }
-    size = ROUNDUP(size, PAGE_SIZE);
+    size = ROUNDUP(size, PAGE_SIZE);  //对齐到整数页
 
     if (!IS_PAGE_ALIGNED(vaddr) || pfn == 0) { //虚拟地址需要页对齐，0号内存页不能用来映射
         VM_ERR("invalid map map vaddr %x or pfn %x", vaddr, pfn);
@@ -115,13 +115,13 @@ int remap_pfn_range(VADDR_T vaddr, unsigned long pfn, unsigned long size, unsign
 
     (VOID)LOS_MuxAcquire(&space->regionMux);
 
-    region = LOS_RegionFind(space, vaddr);   //在地址空间中寻找虚拟地址对应的内存区
+    region = LOS_RegionFind(space, vaddr);   //在地址空间中寻找虚拟地址所在的内存区
     if (region == NULL) {
         VM_ERR("region not exists");
         status = LOS_ERRNO_VM_NOT_FOUND;
         goto OUT;
     }
-    end = vaddr + size;
+    end = vaddr + size; //内存区的结尾
     if (region->range.base + region->range.size < end) {
 		//需要映射的虚拟地址范围不能跨越内存区
         VM_ERR("out of range:base=%x size=%d vaddr=%x len=%u",
@@ -132,7 +132,7 @@ int remap_pfn_range(VADDR_T vaddr, unsigned long pfn, unsigned long size, unsign
 
     /* check */
     for (vpos = vaddr; vpos < end; vpos += PAGE_SIZE) {
-		//这个虚拟地址范围中，是否有内存页已经映射过
+		//查询本内存区是否已映射物理内存
         status = LOS_ArchMmuQuery(&space->archMmu, (VADDR_T)vpos, NULL, NULL);
         if (status == LOS_OK) {
             VM_ERR("remap_pfn_range, address mapping already exist");
@@ -143,6 +143,7 @@ int remap_pfn_range(VADDR_T vaddr, unsigned long pfn, unsigned long size, unsign
 
     /* map all */
 	//上述虚拟地址还没有映射到物理内存，这里一次性映射完毕
+	//直接映射连续内存页，因为是涉及DMA,需要跨页读写内存
     ret = LOS_ArchMmuMap(&space->archMmu, vaddr, paddr, size >> PAGE_SHIFT, prot);
     if (ret <= 0) {
         VM_ERR("ioremap LOS_ArchMmuMap failed err = %d", ret);
@@ -156,6 +157,8 @@ OUT:
     return status;
 }
 
+
+//申请DMA内存
 VOID *LOS_DmaMemAlloc(DMA_ADDR_T *dmaAddr, size_t size, size_t align, enum DmaMemType type)
 {
     VOID *kVaddr = NULL;
