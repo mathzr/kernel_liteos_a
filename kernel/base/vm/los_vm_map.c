@@ -858,7 +858,7 @@ ERR_REGION_SPLIT:
 }
 
 
-//释放用户态堆空间
+//释放用户态堆空间的物理内存
 INT32 OsUserHeapFree(LosVmSpace *vmSpace, VADDR_T addr, size_t len)
 {
     LosVmMapRegion *vmRegion = NULL;

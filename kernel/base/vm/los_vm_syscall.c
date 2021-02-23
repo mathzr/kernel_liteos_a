@@ -116,15 +116,16 @@ VADDR_T LOS_MMap(VADDR_T vaddr, size_t len, unsigned prot, unsigned long flags, 
     }
 
     (VOID)LOS_MuxAcquire(&vmSpace->regionMux);
-    /* user mode calls mmap to release heap physical memory without releasing heap virtual space */
-    status = OsUserHeapFree(vmSpace, vaddr, len);  //先释放虚拟地址对应的堆空间
+    /* user mode calls mmap to release heap physical memory without releasing heap virtual space */	
+	//如果用户传入了堆空间的地址，那么用户只是想释放这个范围对应的物理内存
+    status = OsUserHeapFree(vmSpace, vaddr, len);  
     if (status == LOS_OK) {
         resultVaddr = vaddr;
         goto MMAP_DONE;
     }
 
     regionFlags = OsCvtProtFlagsToRegionFlags(prot, flags); //将用户传入的标志位做一次适配
-    //分配本次映射所需的内存区
+    //分配本次映射所需的内存区，如果用户传入了vaddr，则可能内存区已存在
     newRegion = LOS_RegionAlloc(vmSpace, vaddr, len, regionFlags, pgoff);
     if (newRegion == NULL) {
         resultVaddr = (VADDR_T)-ENOMEM;
@@ -166,9 +167,10 @@ STATUS_T LOS_UnMMap(VADDR_T addr, size_t size)
 
 
 //执行brk系统调用的相关操作
+//brk用于动态调整堆空间的大小
 VOID *LOS_DoBrk(VOID *addr)
 {
-    LosVmSpace *space = OsCurrProcessGet()->vmSpace;
+    LosVmSpace *space = OsCurrProcessGet()->vmSpace; //在当前进程的用户空间调整
     size_t size;
     VOID *ret = NULL;
     LosVmMapRegion *region = NULL;
@@ -194,10 +196,10 @@ VOID *LOS_DoBrk(VOID *addr)
         oldBrk = LOS_Align(space->heapNow, PAGE_SIZE);  //旧堆顶部
         //取消瘦身部分的堆空间的映射(释放部分堆空间)
         if (LOS_UnMMap(newBrk, (oldBrk - newBrk)) < 0) {
-            return (void *)(UINTPTR)space->heapNow;
+            return (void *)(UINTPTR)space->heapNow;  //堆瘦身失败
         }
-        space->heapNow = (VADDR_T)(UINTPTR)alignAddr; //新堆顶
-        return alignAddr;  //返回新堆顶
+        space->heapNow = (VADDR_T)(UINTPTR)alignAddr; //瘦身成功
+        return alignAddr;   //返回新堆顶
     }
 
 	//堆扩张
@@ -209,7 +211,7 @@ VOID *LOS_DoBrk(VOID *addr)
         goto REGION_ALLOC_FAILED;
     }
     if (space->heapBase == space->heapNow) {
-		//首次调用brk时，创建一个内存区用于堆使用
+		//当前堆空间为0，首次调用brk时，创建一个内存区用于堆使用
         region = LOS_RegionAlloc(space, space->heapBase, size,
                                  VM_MAP_REGION_FLAG_PERM_READ | VM_MAP_REGION_FLAG_PERM_WRITE |
                                  VM_MAP_REGION_FLAG_PERM_USER, 0);
@@ -219,7 +221,7 @@ VOID *LOS_DoBrk(VOID *addr)
             goto REGION_ALLOC_FAILED;
         }
         region->regionFlags |= VM_MAP_REGION_FLAG_HEAP;  //这个内存区用于堆使用
-        space->heap = region; //这个内存区用于堆使用
+        space->heap = region; //整个地址空间中，只有一个内存区给堆使用
     }
 
     space->heapNow = (VADDR_T)(UINTPTR)alignAddr; //新堆顶部
@@ -264,19 +266,19 @@ int LOS_DoMprotect(VADDR_T vaddr, size_t len, unsigned long prot)
     /* if only move some part of region, we need to split first */
     if (region->range.size > len) {
 		//只对区域的一部分修改权限标记的情况下，先对区域做切分
-        OsVmRegionAdjust(space, vaddr, len);
+        OsVmRegionAdjust(space, vaddr, len); //最多会切分成3个区域
     }
 
     vmFlags = OsCvtProtFlagsToRegionFlags(prot, 0); //适配用户输入的权限信息
     vmFlags |= (region->regionFlags & VM_MAP_REGION_FLAG_SHARED) ? VM_MAP_REGION_FLAG_SHARED : 0; //保留原共享标记
-    region = LOS_RegionFind(space, vaddr);  //再次查询内存区，因为前面内存区可能做了分割
+    region = LOS_RegionFind(space, vaddr);  //再次查询内存区，因为前面内存区可能做了分割，这次会查询到分割后的内存区
     if (region == NULL) {
         ret = -ENOMEM;
         goto OUT_MPROTECT;
     }
-    region->regionFlags = vmFlags; //记录内存区标志
-    count = len >> PAGE_SHIFT; //需要修改访问权限的内存页数目
-    ret = LOS_ArchMmuChangeProt(&space->archMmu, vaddr, count, region->regionFlags); //执行修改权限的动作
+    region->regionFlags = vmFlags; //刷新切割后内存区标志
+    count = len >> PAGE_SHIFT; //新内存区包含的内存页数目
+    ret = LOS_ArchMmuChangeProt(&space->archMmu, vaddr, count, region->regionFlags); //每一个内存页都修改权限
     if (ret) {
         ret = -ENOMEM;
         goto OUT_MPROTECT;
@@ -374,26 +376,28 @@ VADDR_T LOS_DoMremap(VADDR_T oldAddress, size_t oldSize, size_t newSize, int fla
     }
 
     /* if only move some part of region, we need to split first */
-	//只需要对内存区的某部分区域进行重映射的情况下，则需要裁剪内存区成多个内存区
+	//只需要对内存区的某部分区域进行重映射的情况下，则需要分割内存区成多个内存区，最多3个
     status = OsVmRegionAdjust(space, oldAddress, oldSize);
     if (status) {
         ret = -ENOMEM;
         goto OUT_MREMAP;
     }
 
-    regionOld = LOS_RegionFind(space, oldAddress);  //查找现在需要重映射的内存区
+	//在内存区分割后，再查找内存区，这个时候会找到最合适的那个小内存区[oldAddr, oldAddress+oldSize)
+    regionOld = LOS_RegionFind(space, oldAddress);  
     if (regionOld == NULL) {
         ret = -ENOMEM;
         goto OUT_MREMAP;
     }
 
     if ((unsigned int)flags & MREMAP_FIXED) {
-        regionNew = OsVmRegionDup(space, regionOld, newAddr, newSize); //对内存区做一个复制，并记录新的地址和尺寸
+		//除了地址和长度，创建一个与旧内存区其它属性一样的内存区， newSize <= oldSize
+        regionNew = OsVmRegionDup(space, regionOld, newAddr, newSize); 
         if (!regionNew) {
             ret = -ENOMEM;
             goto OUT_MREMAP;
         }
-		//修改地址转换表
+		//将地址转换表做一个刷新
         status = LOS_ArchMmuMove(&space->archMmu, oldAddress, newAddr,
                                  ((newSize < regionOld->range.size) ? newSize : regionOld->range.size) >> PAGE_SHIFT,
                                  regionOld->regionFlags);
@@ -414,7 +418,8 @@ VADDR_T LOS_DoMremap(VADDR_T oldAddress, size_t oldSize, size_t newSize, int fla
         ret = oldAddress;
         goto OUT_MREMAP;
     }
-    status = OsIsRegionCanExpand(space, regionOld, newSize); //判断原内存区是否可以直接扩展
+	//判断原内存区是否可以直接扩展，即与下一个内存区之间的剩余空间是否够用
+    status = OsIsRegionCanExpand(space, regionOld, newSize); 
     // we can expand directly.
     if (!status) {
 		//如果可以，则直接扩展
@@ -423,7 +428,7 @@ VADDR_T LOS_DoMremap(VADDR_T oldAddress, size_t oldSize, size_t newSize, int fla
         goto OUT_MREMAP;
     }
 
-	//否则，需要迁移到另外一个内存区
+	//否则，需要迁移到另外一个内存区(允许迁移的情况下)
     if ((unsigned int)flags & MREMAP_MAYMOVE) {
 		//先复制现在的内存区，并将尺寸设置成新的内存区尺寸
 		//由系统给出合理的起始地址
@@ -432,7 +437,7 @@ VADDR_T LOS_DoMremap(VADDR_T oldAddress, size_t oldSize, size_t newSize, int fla
             ret = -ENOMEM;
             goto OUT_MREMAP;
         }
-		//然后刷新地址转换表
+		//然后刷新地址转换表，因为扩容，所以原内存区的所有页映射都要拷贝
         status = LOS_ArchMmuMove(&space->archMmu, oldAddress, regionNew->range.base,
                                  regionOld->range.size >> PAGE_SHIFT, regionOld->regionFlags);
         if (status) {
@@ -474,7 +479,7 @@ VOID LOS_DumpMemRegion(VADDR_T vaddr)
         return;  //只打印虚拟地址附近1M地址的相关信息
     }
 
-    OsDumpPte(vaddr); //打印此虚拟地址相关的页表项
+    OsDumpPte(vaddr); //打印此虚拟地址相关的页表项(二级页表)
     OsDumpAspace(space); //打印此地址空间的相关信息
 }
 

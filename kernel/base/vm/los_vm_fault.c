@@ -60,7 +60,7 @@ STATIC STATUS_T OsVmRegionRightCheck(LosVmMapRegion *region, UINT32 flags)
 {
     if ((flags & VM_MAP_PF_FLAG_WRITE) == VM_MAP_PF_FLAG_WRITE) {
         if ((region->regionFlags & VM_MAP_REGION_FLAG_PERM_WRITE) != VM_MAP_REGION_FLAG_PERM_WRITE) {
-			//本内存区不具有写权限，但用户要求写操作
+			//本内存区不允许写，但用户要求写操作
             VM_ERR("write permission check failed operation flags %x, region flags %x", flags, region->regionFlags);
             return LOS_NOK;
         }
@@ -68,7 +68,7 @@ STATIC STATUS_T OsVmRegionRightCheck(LosVmMapRegion *region, UINT32 flags)
 
     if ((flags & VM_MAP_PF_FLAG_INSTRUCTION) == VM_MAP_PF_FLAG_INSTRUCTION) {
         if ((region->regionFlags & VM_MAP_REGION_FLAG_PERM_EXECUTE) != VM_MAP_REGION_FLAG_PERM_EXECUTE) {
-			//内存区不存在可执行权限，但用户要求执行程序
+			//内存区不允许执行，但用户要求执行程序
             VM_ERR("exec permission check failed operation flags %x, region flags %x", flags, region->regionFlags);
             return LOS_NOK;
         }
@@ -90,7 +90,7 @@ STATIC VOID OsFaultTryFixup(ExcContext *frame, VADDR_T excVaddr, STATUS_T *statu
 #endif
 
     if ((frame->regCPSR & CPSR_MODE_MASK) != CPSR_MODE_USR) {
-		//在内核态发生的错误
+		//在内核态发生的错误,TBD
         for (int i = 0; i < tableNum; ++i, ++excTable) {
             if (frame->PC == (UINTPTR)excTable->excAddr) { //如果在异常处理过程中再发生异常
                 frame->PC = (UINTPTR)excTable->fixAddr;  //则调整异常处理的指令
@@ -101,23 +101,23 @@ STATIC VOID OsFaultTryFixup(ExcContext *frame, VADDR_T excVaddr, STATUS_T *statu
         }
     }
 
-#ifdef LOSCFG_DEBUG_VERSION
+#ifdef LOSCFG_DEBUG_VERSION	
     vaddr = ROUNDDOWN(excVaddr, PAGE_SIZE);
     space = LOS_SpaceGet(vaddr);
     if (space != NULL) {
-        LOS_DumpMemRegion(vaddr);  //无法修复的情况，打印产生异常的地址相关调试信息
+        LOS_DumpMemRegion(vaddr);  //用户空间无法正常访问此虚拟地址，打印调试信息
     }
 #endif
 }
 
 #ifdef LOSCFG_FS_VFS
-//处理内存读错误
+//文件页读操作的异常处理
 STATIC STATUS_T OsDoReadFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
 {
     status_t ret;
     PADDR_T paddr;
     LosVmPage *page = NULL;
-    VADDR_T vaddr = (VADDR_T)vmPgFault->vaddr;  //引起读异常的虚拟地址
+    VADDR_T vaddr = (VADDR_T)vmPgFault->vaddr;  //引起读异常的页虚拟地址
     LosVmSpace *space = region->space;
 
     ret = LOS_ArchMmuQuery(&space->archMmu, vaddr, NULL, NULL);
@@ -131,16 +131,16 @@ STATIC STATUS_T OsDoReadFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
     }
 
     (VOID)LOS_MuxAcquire(&region->unTypeData.rf.file->f_mapping->mux_lock);
-	//此区域定义的文件映射出错处理，缺页异常？
+	//此区域定义的文件映射出错处理
     ret = region->unTypeData.rf.vmFOps->fault(region, vmPgFault); 
     if (ret == LOS_OK) {
         paddr = LOS_PaddrQuery(vmPgFault->pageKVaddr); //已经分配好物理页
         page = LOS_VmPageGet(paddr); //获取物理页描述符
         if (page != NULL) { /* just incase of page null */
-            LOS_AtomicInc(&page->refCounts); //使用此页
+            LOS_AtomicInc(&page->refCounts); //文件使用此页做为页缓存
             OsCleanPageLocked(page); //解锁此内存页
         }
-		//对申请好的内存页添加映射关系，剥离可写属性
+		//对申请好的内存页添加映射关系，本页不具备可写属性
         ret = LOS_ArchMmuMap(&space->archMmu, vaddr, paddr, 1,
                              region->regionFlags & (~VM_MAP_REGION_FLAG_PERM_WRITE));
         if (ret < 0) {
@@ -159,7 +159,8 @@ STATIC STATUS_T OsDoReadFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
 }
 
 /* numap a page when cow happend only */
-//在写时拷贝时，取消原内存页的映射
+//对普通虚拟内存做写操作时发生异常，启动写时拷贝机制，另外申请物理页来写入。
+//那么还需要取消原物理页的映射
 STATIC LosVmPage *OsCowUnmapOrg(LosArchMmu *archMmu, LosVmMapRegion *region, LosVmPgFault *vmf)
 {
     UINT32 intSave;
@@ -171,16 +172,16 @@ STATIC LosVmPage *OsCowUnmapOrg(LosArchMmu *archMmu, LosVmMapRegion *region, Los
     LOS_SpinLockSave(&region->unTypeData.rf.file->f_mapping->list_lock, &intSave);
     fpage = OsFindGetEntry(region->unTypeData.rf.file->f_mapping, vmf->pgoff); //先查询文件映射页面
     if (fpage != NULL) {
-        oldPage = fpage->vmPage; 
+        oldPage = fpage->vmPage; //原物理页
         OsSetPageLocked(oldPage);  //锁住此文件原来映射的内存页
-        mapInfo = OsGetMapInfo(fpage, archMmu, vaddr);
+        mapInfo = OsGetMapInfo(fpage, archMmu, vaddr); //获取原虚拟地址映射记录
         if (mapInfo != NULL) {
-            OsUnmapPageLocked(fpage, mapInfo);
+            OsUnmapPageLocked(fpage, mapInfo); //取消原映射记录，并解除和物理页绑定关系
         } else {
-            LOS_ArchMmuUnmap(archMmu, vaddr, 1);
+            LOS_ArchMmuUnmap(archMmu, vaddr, 1); //解除虚拟地址和物理页绑定关系
         }
     } else {
-        LOS_ArchMmuUnmap(archMmu, vaddr, 1);
+        LOS_ArchMmuUnmap(archMmu, vaddr, 1); //解除虚拟地址和物理页绑定关系
     }
     LOS_SpinUnlockRestore(&region->unTypeData.rf.file->f_mapping->list_lock, intSave);
 
@@ -188,6 +189,7 @@ STATIC LosVmPage *OsCowUnmapOrg(LosArchMmu *archMmu, LosVmMapRegion *region, Los
 }
 #endif
 
+//普通内存页的写异常，一般是权限问题，需要使用写时拷贝，申请一页赋予写权限再写
 status_t OsDoCowFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
 {
     STATUS_T ret;
@@ -205,11 +207,14 @@ status_t OsDoCowFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
     }
 
     space = region->space;
+	//查询虚拟页对应的物理页是否存在
     ret = LOS_ArchMmuQuery(&space->archMmu, (VADDR_T)vmPgFault->vaddr, &oldPaddr, NULL);
     if (ret == LOS_OK) {
+		//如果存在，则取消原物理页映射
         oldPage = OsCowUnmapOrg(&space->archMmu, region, vmPgFault);
     }
 
+	//申请新的物理页
     newPage = LOS_PhysPageAlloc();
     if (newPage == NULL) {
         VM_ERR("pmm_alloc_page fail");
@@ -221,7 +226,7 @@ status_t OsDoCowFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
     kvaddr = OsVmPageToVaddr(newPage);
 
     (VOID)LOS_MuxAcquire(&region->unTypeData.rf.file->f_mapping->mux_lock);
-    ret = region->unTypeData.rf.vmFOps->fault(region, vmPgFault);
+    ret = region->unTypeData.rf.vmFOps->fault(region, vmPgFault);  //TBD
     if (ret != LOS_OK) {
         VM_ERR("call region->vm_ops->fault fail");
         (VOID)LOS_MuxRelease(&region->unTypeData.rf.file->f_mapping->mux_lock);
@@ -234,18 +239,23 @@ status_t OsDoCowFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
      * we can take it as a anonymous cow map.
      */
     if ((oldPaddr == 0) || (LOS_PaddrToKVaddr(oldPaddr) == vmPgFault->pageKVaddr)) {
+		//原来的物理页不存在，或者映射到了页缓存
+		//那么直接把数据从旧内存页拷贝到新内存页来
         (VOID)memcpy_s(kvaddr, PAGE_SIZE, vmPgFault->pageKVaddr, PAGE_SIZE);
-        LOS_AtomicInc(&newPage->refCounts);
-        OsCleanPageLocked(LOS_VmPageGet(LOS_PaddrQuery(vmPgFault->pageKVaddr)));
+        LOS_AtomicInc(&newPage->refCounts); //增加新内存页引用计数
+        OsCleanPageLocked(LOS_VmPageGet(LOS_PaddrQuery(vmPgFault->pageKVaddr))); //解锁原物理内存页
     } else {
+		//将原内存页数据拷贝到新内存页(内部判断是否真的需要拷贝)
         OsPhysSharePageCopy(oldPaddr, &newPaddr, newPage);
         /* use old page free the new one */
         if (newPaddr == oldPaddr) {
+			//不需要拷贝的情况下，直接释放新内存页，使用旧内存页
             LOS_PhysPageFree(newPage);
             newPage = NULL;
         }
     }
 
+	//将虚拟页重新映射到新的物理页上
     ret = LOS_ArchMmuMap(&space->archMmu, (VADDR_T)vmPgFault->vaddr, newPaddr, 1, region->regionFlags);
     if (ret < 0) {
         VM_ERR("LOS_ArchMmuMap fial");
@@ -256,7 +266,7 @@ status_t OsDoCowFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
     (VOID)LOS_MuxRelease(&region->unTypeData.rf.file->f_mapping->mux_lock);
 
     if (oldPage != NULL) {
-        OsCleanPageLocked(oldPage);
+        OsCleanPageLocked(oldPage); //解锁旧的物理页
     }
 
     return LOS_OK;
@@ -272,7 +282,7 @@ ERR_OUT:
     return ret;
 }
 
-//写内存出现异常后的处理
+//写文件共享内存出现异常后的处理
 status_t OsDoSharedFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
 {
     STATUS_T ret;
@@ -291,6 +301,7 @@ status_t OsDoSharedFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
 	//查询虚拟地址对应的物理地址
     ret = LOS_ArchMmuQuery(&space->archMmu, vmPgFault->vaddr, &paddr, NULL);
     if (ret == LOS_OK) {
+		//物理内存存在，为何出现写异常呢，看来原来的物理页有问题，需要更换
 		//取消原物理地址映射
         LOS_ArchMmuUnmap(&space->archMmu, vmPgFault->vaddr, 1);
 		//然后重新映射，其实是要修改属性
@@ -304,7 +315,7 @@ status_t OsDoSharedFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
 		//查找此内存区域对应的引起写异常的文件页
         fpage = OsFindGetEntry(region->unTypeData.rf.file->f_mapping, vmPgFault->pgoff);
         if (fpage) {
-			//将文件页标记成脏页，上次写异常，所以本次需要触发再次写操作
+			//如果此内存页是页缓存，则需要标记成脏页，方便触发再次写文件
             OsMarkPageDirty(fpage, region, 0, 0);
         }
         LOS_SpinUnlockRestore(&region->unTypeData.rf.file->f_mapping->list_lock, intSave);
@@ -312,6 +323,7 @@ status_t OsDoSharedFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
         return LOS_OK;
     }
 
+	//原来物理页不存在的情况
     (VOID)LOS_MuxAcquire(&region->unTypeData.rf.file->f_mapping->mux_lock);
     ret = region->unTypeData.rf.vmFOps->fault(region, vmPgFault);
     if (ret == LOS_OK) {
@@ -380,7 +392,7 @@ STATUS_T OsVmPageFaultHandler(VADDR_T vaddr, UINT32 flags, ExcContext *frame)
     if (space == NULL) {
         VM_ERR("vm space not exists, vaddr: %#x", vaddr);
         status = LOS_ERRNO_VM_NOT_FOUND;
-        OsFaultTryFixup(frame, excVaddr, &status);  //虚拟地址不存在的情况下，尝试修复
+        OsFaultTryFixup(frame, excVaddr, &status);  //虚拟地址不存在的情况下，尝试修复 
         return status;
     }
 
