@@ -578,7 +578,7 @@ VOID OsDelMapInfo(LosVmMapRegion *region, LosVmPgFault *vmf, BOOL cleanDirty)
 }
 
 
-//文件页异常处理
+//文件页异常处理，即文件页不存在对应的物理页
 INT32 OsVmmFileFault(LosVmMapRegion *region, LosVmPgFault *vmf)
 {
     INT32 ret;
@@ -644,6 +644,8 @@ INT32 OsVmmFileFault(LosVmMapRegion *region, LosVmPgFault *vmf)
     /* cow fault case no need to save mapinfo */
     if (!((vmf->flags & VM_MAP_PF_FLAG_WRITE) && !(region->regionFlags & VM_MAP_REGION_FLAG_SHARED))) {
 		//读操作或者共享内存的写操作，需要记录下操作的虚拟地址
+		//因为这2个操作都是多对一的。多个虚拟页对应同一个物理页
+		//所以，需要把对应关系维护起来
         OsAddMapInfo(fpage, &region->space->archMmu, (vaddr_t)vmf->vaddr);
         fpage->flags = region->regionFlags;
     }
@@ -654,7 +656,7 @@ INT32 OsVmmFileFault(LosVmMapRegion *region, LosVmPgFault *vmf)
         OsMarkPageDirty(fpage, region, 0, 0);
     }
 
-    vmf->pageKVaddr = kvaddr; //记录下引起异常的虚拟地址
+    vmf->pageKVaddr = kvaddr; //记录下解决页异常后的物理页的虚拟地址
     LOS_SpinUnlockRestore(&mapping->list_lock, intSave);
     return LOS_OK;
 }

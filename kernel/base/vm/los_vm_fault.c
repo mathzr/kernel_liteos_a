@@ -325,15 +325,16 @@ status_t OsDoSharedFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
 
 	//原来物理页不存在的情况
     (VOID)LOS_MuxAcquire(&region->unTypeData.rf.file->f_mapping->mux_lock);
-    ret = region->unTypeData.rf.vmFOps->fault(region, vmPgFault);
+    ret = region->unTypeData.rf.vmFOps->fault(region, vmPgFault); //这里面会申请好新的物理页
     if (ret == LOS_OK) {
-        paddr = LOS_PaddrQuery(vmPgFault->pageKVaddr);
-        page = LOS_VmPageGet(paddr);
+        paddr = LOS_PaddrQuery(vmPgFault->pageKVaddr); //获得物理页首地址
+        page = LOS_VmPageGet(paddr); //物理页
          /* just in case of page null */
         if (page != NULL) {
-            LOS_AtomicInc(&page->refCounts);
-            OsCleanPageLocked(page);
+            LOS_AtomicInc(&page->refCounts); //增加物理页引用计数
+            OsCleanPageLocked(page); //解锁物理页
         }
+		//将虚拟页和物理页映射起来
         ret = LOS_ArchMmuMap(&space->archMmu, vaddr, paddr, 1, region->regionFlags);
         if (ret < 0) {
             VM_ERR("LOS_ArchMmuMap failed. ret=%d", ret);
@@ -357,6 +358,9 @@ status_t OsDoSharedFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
  * won't write through to the underlying file. For SHARED fault, pagecache is mapping with
  * region->arch_mmu_flags and the changes on this page will write through to the underlying file
  */
+ //页缓存的读操作，只需要以共享方式操作即可(节省内存)，此内存页标记成不可写。
+ //当需要写入时，会触发异常。对于不共享的内存页，则采用写时拷贝。
+ //对于共享内存，直接使用已有的内存页(或者物理页不存在时，申请新内存页)
 STATIC STATUS_T OsDoFileFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault, UINT32 flags)
 {
     STATUS_T ret;
@@ -393,7 +397,7 @@ STATUS_T OsVmPageFaultHandler(VADDR_T vaddr, UINT32 flags, ExcContext *frame)
         VM_ERR("vm space not exists, vaddr: %#x", vaddr);
         status = LOS_ERRNO_VM_NOT_FOUND;
         OsFaultTryFixup(frame, excVaddr, &status);  //虚拟地址不存在的情况下，尝试修复 
-        return status;
+        return status; //返回修复结果
     }
 
     if (((flags & VM_MAP_PF_FLAG_USER) != 0) && (!LOS_IsUserAddress(vaddr))) {
@@ -407,14 +411,14 @@ STATUS_T OsVmPageFaultHandler(VADDR_T vaddr, UINT32 flags, ExcContext *frame)
     if (region == NULL) {
         VM_ERR("region not exists, vaddr: %#x", vaddr);
         status = LOS_ERRNO_VM_NOT_FOUND;
-        goto CHECK_FAILED;
+        goto CHECK_FAILED; //内存区不存在，类似于segment fault, 即段错误
     }
 
-	//检查内存区的权限
+	//检查内存区的权限，这里还不涉及物理页的权限
     status = OsVmRegionRightCheck(region, flags);
     if (status != LOS_OK) {
         status = LOS_ERRNO_VM_ACCESS_DENIED;
-        goto CHECK_FAILED;
+        goto CHECK_FAILED; //访问权限错误
     }
 
 	//在低内存状态下，做尝试回收部分内存的动作，如果仍然低，则退出
@@ -436,10 +440,10 @@ STATUS_T OsVmPageFaultHandler(VADDR_T vaddr, UINT32 flags, ExcContext *frame)
             goto  CHECK_FAILED;  //但文件却没有反过来的映射关系
         }
         vmPgFault.vaddr = vaddr;  //记录产生异常的虚拟地址
-        //计算此虚拟地址所在的内存页编号
+        //计算此虚拟地址所在的文件内存页编号
         vmPgFault.pgoff = ((vaddr - region->range.base) >> PAGE_SHIFT) + region->pgOff;
         vmPgFault.flags = flags;
-        vmPgFault.pageKVaddr = NULL;
+        vmPgFault.pageKVaddr = NULL; //现在还不清楚对应的物理内存
 
 		//进一步执行文件映射的页异常处理
         status = OsDoFileFault(region, &vmPgFault, flags);
@@ -447,11 +451,11 @@ STATUS_T OsVmPageFaultHandler(VADDR_T vaddr, UINT32 flags, ExcContext *frame)
             VM_ERR("vm fault error, status=%d", status);
             goto CHECK_FAILED;
         }
-        goto DONE;  
+        goto DONE;  //成功处理常规文件读写异常(如暂时缺乏物理页，写时拷贝等)
     }
 #endif
 
-	//申请一个新的物理页
+	//不是文件映射的内存区，那么申请一个新的物理页
     newPage = LOS_PhysPageAlloc();
     if (newPage == NULL) {
         status = LOS_ERRNO_VM_NO_MEMORY;
@@ -465,17 +469,17 @@ STATUS_T OsVmPageFaultHandler(VADDR_T vaddr, UINT32 flags, ExcContext *frame)
     if (status >= 0) {
 		//先取消原来的映射
         LOS_ArchMmuUnmap(&space->archMmu, vaddr, 1);
-		//并将数据拷贝到新的内存页
+		//并将数据拷贝到新的内存页(内部会判断是否真的拷贝)
         OsPhysSharePageCopy(oldPaddr, &newPaddr, newPage);
         /* use old page free the new one */
         if (newPaddr == oldPaddr) {
-			//如果新旧物理页就是同一个，这种情况会存在吗？
+			//不需要拷贝的情况，那么释放新内存页
             LOS_PhysPageFree(newPage);
             newPage = NULL;
         }
 
         /* map all of the pages */
-		//将虚拟地址重新映射到新的内存页上
+		//将虚拟页重新映射到新的物理内存页上
         status = LOS_ArchMmuMap(&space->archMmu, vaddr, newPaddr, 1, region->regionFlags);
         if (status < 0) {
             VM_ERR("failed to map replacement page, status:%d", status);
@@ -487,8 +491,8 @@ STATUS_T OsVmPageFaultHandler(VADDR_T vaddr, UINT32 flags, ExcContext *frame)
         goto DONE;
     } else {
         /* map all of the pages */
-		//虚拟地址原来没有物理内存页映射，则直接映射到新的物理内存页上
-        LOS_AtomicInc(&newPage->refCounts);
+		//虚拟页原来没有物理内存页映射，则直接映射到新的物理内存页上
+        LOS_AtomicInc(&newPage->refCounts); //增加物理页引用计数
         status = LOS_ArchMmuMap(&space->archMmu, vaddr, newPaddr, 1, region->regionFlags);
         if (status < 0) {
             VM_ERR("failed to map page, status:%d", status);
