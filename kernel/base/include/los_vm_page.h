@@ -66,7 +66,8 @@ typedef struct VmPage {
 	//本物理内存页所在的物理内存段的编号
     UINT8               segID;       /**< the segment id of vm page */
 
-	//当申请连续的物理内存页时，在第一页的描述符中写入下列字段，>=1, 表示连续的内存页数目
+	//当申请成功连续的物理内存页后，记录申请的内存页数目
+	//释放的时候，才知道应该释放多少页内存
     UINT16              nPages;      /**< the vm page is used for kernel heap */
 } LosVmPage;
 

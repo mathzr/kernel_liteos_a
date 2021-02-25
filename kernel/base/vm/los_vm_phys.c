@@ -45,7 +45,7 @@ extern "C" {
 #define ONE_PAGE    1
 
 /* Physical memory area array */
-//物理内存区域
+//物理内存区域,目前只有一个物理内存区域，不排除未来增加物理内存区域
 STATIC struct VmPhysArea g_physArea[] = {
     {
         .start = SYS_MEM_BASE,  //物理内存区起始地址
@@ -81,7 +81,7 @@ STATIC VOID OsVmPhysLruInit(struct VmPhysSeg *seg)
 }
 
 
-//创建物理内存段
+//根据物理内存区域创建物理内存段
 STATIC INT32 OsVmPhysSegCreate(paddr_t start, size_t size)
 {
     struct VmPhysSeg *seg = NULL;
@@ -91,11 +91,14 @@ STATIC INT32 OsVmPhysSegCreate(paddr_t start, size_t size)
     }
 
 	//物理内存段需要按地址进行大小排序，地址小的排在前面	
+	//最末内存段的后一个内存段。当系统还未创建任何内存段时，这里就是第一个内存段
     seg = &g_vmPhysSeg[g_vmPhysSegNum++]; 
+	//依次移动末尾若干个内存段，移动一个位置
+	//找出适合新内存段的位置
     for (; (seg > g_vmPhysSeg) && ((seg - 1)->start > (start + size)); seg--) {
         *seg = *(seg - 1);
     }
-	//找到合适的位置，存入内存段信息
+	//找到合适的位置，存入新内存段信息
     seg->start = start;
     seg->size = size;
 
@@ -110,8 +113,8 @@ VOID OsVmPhysSegAdd(VOID)
 
     LOS_ASSERT(g_vmPhysSegNum <= VM_PHYS_SEG_MAX);
 
-	//根据g_physArea数组来创建物理内存段
-	//实际上是保持相同的数组尺寸
+	//根据g_physArea数组来创建物理内存段，目前只有一个内存区
+	//实际上是保持相同的数组尺寸，所有也只会添加一个物理内存段
     for (i = 0; i < (sizeof(g_physArea) / sizeof(g_physArea[0])); i++) {
         ret = OsVmPhysSegCreate(g_physArea[i].start, g_physArea[i].size);
         if (ret != 0) {
@@ -121,7 +124,7 @@ VOID OsVmPhysSegAdd(VOID)
 }
 
 
-//调整物理内存段的尺寸，即物理内存段最前面的部分标记成已占用，后面不能再使用
+//调整物理内存段的尺寸，即物理内存段最前面的部分标记成已占用(内核保留)，后面不能再使用
 //对后续使用者不可见
 VOID OsVmPhysAreaSizeAdjust(size_t size)
 {
@@ -134,12 +137,13 @@ VOID OsVmPhysAreaSizeAdjust(size_t size)
 }
 
 
-//物理内存页总数
+//物理内存页总数,这个时候已经扣除了内核预留的物理内存
 UINT32 OsVmPhysPageNumGet(VOID)
 {
     UINT32 nPages = 0;
     INT32 i;
 
+	//系统中目前只有一个内存段，这里还是假定系统有多个物理内存段，方便未来扩展
     for (i = 0; i < (sizeof(g_physArea) / sizeof(g_physArea[0])); i++) {
         nPages += g_physArea[i].size >> PAGE_SHIFT;  //通过尺寸计算内存页数目
     }
@@ -177,7 +181,9 @@ VOID OsVmPhysInit(VOID)
 	//针对物理内存中的每一段内存进行初始化，实际上就1段
     for (i = 0; i < g_vmPhysSegNum; i++) {
         seg = &g_vmPhysSeg[i];
-        seg->pageBase = &g_vmPageArray[nPages]; //本内存段的物理页表描述符起始地址，已经排除了页表占用的内存
+		//第0段内存从第0页开始
+		//第i段内存从第nPages页开始
+        seg->pageBase = &g_vmPageArray[nPages]; //本内存段的物理页表描述符起始地址
         nPages += seg->size >> PAGE_SHIFT;  //本内存段占用的物理页数目
         OsVmPhysFreeListInit(seg);  //初始化管理连续物理内存页的空闲链表
         OsVmPhysLruInit(seg); //初始化各种已使用物理页的LRU链表
@@ -199,7 +205,7 @@ STATIC VOID OsVmPhysFreeListAdd(LosVmPage *page, UINT8 order)
 
     list = &seg->freeList[order];
     LOS_ListTailInsert(&list->node, &page->node); //放入相应的空闲队列
-    list->listCnt++; //并增加计数
+    list->listCnt++; //并增加队列中节点数目
 }
 
 
@@ -235,7 +241,7 @@ STATIC VOID OsVmPhysFreeListDelUnsafe(LosVmPage *page)
     list = &seg->freeList[page->order]; //所处的空闲链表
     list->listCnt--; //减少链表长度
     LOS_ListDelete(&page->node); //从链表移除
-    page->order = VM_LIST_ORDER_MAX; //用无效值标记order,代表page不在空闲队列中
+    page->order = VM_LIST_ORDER_MAX; //用初始无效值标记order,代表page当前不在空闲队列中
 }
 
 //同上
@@ -255,9 +261,9 @@ STATIC VOID OsVmPhysFreeListDel(LosVmPage *page)
     page->order = VM_LIST_ORDER_MAX;
 }
 
-//只保留某连续内存页的一部分，其它部分放入空闲队列
-//原空闲内存含有newOrder相关的内存页
-//需要压缩到oldOrder相关尺寸
+//将某连续内存页进行分割
+//原空闲内存含有newOrder相关的连续内存页
+//需要切割到oldOrder相关尺寸
 //其它部分放入空闲队列
 STATIC VOID OsVmPhysPagesSpiltUnsafe(LosVmPage *page, UINT8 oldOrder, UINT8 newOrder)
 {
@@ -265,8 +271,9 @@ STATIC VOID OsVmPhysPagesSpiltUnsafe(LosVmPage *page, UINT8 oldOrder, UINT8 newO
     LosVmPage *buddyPage = NULL;
 
     for (order = newOrder; order > oldOrder;) {
-        order--;
-        buddyPage = &page[VM_ORDER_TO_PAGES(order)];  //一分为二以后，将后半部分存入空闲队列
+        order--; //一分为二。order从3变为2. 连续内存页从8变为4
+        buddyPage = &page[VM_ORDER_TO_PAGES(order)];  //一分为二以后，将后半部分(伙伴)存入空闲队列
+        //例如本轮保留前4页，后4页放回空闲队列
         //对于空闲内存页列表，只有首页的描述符的order才有实际值，其它页的order都是VM_LIST_ORDER_MAX
         //由于我们都是留下后半部分，所以这些内存页的order值都是VM_LIST_ORDER_MAX
         LOS_ASSERT(buddyPage->order == VM_LIST_ORDER_MAX);  
@@ -276,7 +283,7 @@ STATIC VOID OsVmPhysPagesSpiltUnsafe(LosVmPage *page, UINT8 oldOrder, UINT8 newO
 }
 
 
-//通过物理地址计算其所在的内存页
+//通过物理地址获取对应的内存页描述符
 LosVmPage *OsVmPhysToPage(paddr_t pa, UINT8 segID)
 {
     struct VmPhysSeg *seg = NULL;
@@ -345,17 +352,17 @@ LosVmPage *OsVmPhysPagesAlloc(struct VmPhysSeg *seg, size_t nPages)
             if (LOS_ListEmpty(&list->node)) {
                 continue;
             }
-			//只要链表不空，就算找到了
+			//只要链表不空，就算找到了			
             page = LOS_DL_LIST_ENTRY(LOS_DL_LIST_FIRST(&list->node), LosVmPage, node);
             goto DONE;
         }
     }
-	//最多支持连续256页内存的申请，或者没有找到满足要求的连续空闲内存页
+	//不支持超过256页内存的申请，或者没有找到满足要求的连续空闲内存页
     return NULL;
 DONE:
     OsVmPhysFreeListDelUnsafe(page); //从空闲链表中移除
     OsVmPhysPagesSpiltUnsafe(page, order, newOrder); //只切割出我们需要的部分，其它部分放回空闲链表
-    return page;
+    return page; //返回满足要求的连续内存页
 }
 
 
@@ -370,20 +377,20 @@ VOID OsVmPhysPagesFree(LosVmPage *page, UINT8 order)
     }
 
     if (order < VM_LIST_ORDER_MAX - 1) {
-		//此连续内存页释放后，和系统中的已有空闲内存页在一起形成更大的连续内存页
+		//此连续内存页释放后，和系统中的相邻的空闲内存页在一起形成更大的连续内存页
 		//有合并的可能
         pa = VM_PAGE_TO_PHYS(page);  //此连续内存页的起始地址
         do {
             pa ^= VM_ORDER_TO_PHYS(order);  //相邻的潜在合并伙伴的起始地址
             buddyPage = OsVmPhysToPage(pa, page->segID); //潜在伙伴
             if ((buddyPage == NULL) || (buddyPage->order != order)) {
-				//伙伴空闲内存页不存在
+				//伙伴连续空闲内存页不存在，那么不能再合并了
                 break;
             }
             OsVmPhysFreeListDel(buddyPage); //伙伴从空闲链表中移除
             order++; //我与伙伴拼接成更大的连续空闲内存
             pa &= ~(VM_ORDER_TO_PHYS(order) - 1); //新大空闲内存块的起始地址
-            page = OsVmPhysToPage(pa, page->segID); //相关的内存页描述符
+            page = OsVmPhysToPage(pa, page->segID); //大空闲内存块起始页描述符
         } while (order < VM_LIST_ORDER_MAX - 1); //256页连续空闲内存不能再继续合并成512页，系统不支持
     }
 
@@ -454,7 +461,7 @@ STATIC LosVmPage *OsVmPhysPagesGet(size_t nPages)
 }
 
 
-//申请连续的内存页
+//申请连续的内存页，并返回内核虚拟地址
 VOID *LOS_PhysPagesAllocContiguous(size_t nPages)
 {
     LosVmPage *page = NULL;
@@ -490,7 +497,8 @@ VOID LOS_PhysPagesFreeContiguous(VOID *ptr, size_t nPages)
         VM_ERR("vm page of ptr(%#x) is null", ptr);
         return;
     }
-    page->nPages = 0;  //通过此字段置0来描述释放后不再作为连续内存页的起始页
+	//标记此连续若干内存页不再使用，即将释放
+    page->nPages = 0;  
 
     seg = &g_vmPhysSeg[page->segID];
     LOS_SpinLockSave(&seg->freeListLock, &intSave);
@@ -538,7 +546,7 @@ VOID LOS_PhysPageFree(LosVmPage *page)
         LOS_SpinLockSave(&seg->freeListLock, &intSave);
 
         OsVmPhysPagesFreeContiguous(page, ONE_PAGE); //释放这页内存
-        LOS_AtomicSet(&page->refCounts, 0); //并置0引用计数
+        LOS_AtomicSet(&page->refCounts, 0); //引用计数重置0，因为原来可能是负数
 
         LOS_SpinUnlockRestore(&seg->freeListLock, intSave);
     }
@@ -574,7 +582,7 @@ size_t LOS_PhysPagesAlloc(size_t nPages, LOS_DL_LIST *list)
 }
 
 
-//共享内存的写时拷贝，在需要向内存页写入时，先拷贝一个副本
+//普通内存的写时拷贝，在需要向内存页写入时，先拷贝一个副本
 VOID OsPhysSharePageCopy(PADDR_T oldPaddr, PADDR_T *newPaddr, LosVmPage *newPage)
 {
     UINT32 intSave;
@@ -597,9 +605,10 @@ VOID OsPhysSharePageCopy(PADDR_T oldPaddr, PADDR_T *newPaddr, LosVmPage *newPage
     seg = &g_vmPhysSeg[oldPage->segID]; //原来的内存段
     LOS_SpinLockSave(&seg->freeListLock, &intSave);
     if (LOS_AtomicRead(&oldPage->refCounts) == 1) {
-        *newPaddr = oldPaddr; //此内存页还未共享，不需要拷贝副本
+        *newPaddr = oldPaddr; //此内存页当前只有一个使用者，不需要拷贝副本
     } else {
-    	//只针对已共享的内存页，进行写时拷贝
+    	//有多个使用者，为了不影响其它使用者，需要拷贝副本，在副本上修改
+    	//先转换成内核空间地址，才能进一步操作
         newMem = LOS_PaddrToKVaddr(*newPaddr);
         oldMem = LOS_PaddrToKVaddr(oldPaddr);
         if ((newMem == NULL) || (oldMem == NULL)) {
@@ -630,6 +639,7 @@ struct VmPhysSeg *OsVmPhysSegGet(LosVmPage *page)
 }
 
 //获取连续nPages内存页，需要在哪个空闲链表中去取(链表编号)
+//其实质就是求对数，并向上取整
 UINT32 OsVmPagesToOrder(size_t nPages)
 {
     UINT32 order;
@@ -660,13 +670,13 @@ size_t LOS_PhysPagesFree(LOS_DL_LIST *list)
             seg = &g_vmPhysSeg[page->segID];
             LOS_SpinLockSave(&seg->freeListLock, &intSave);
             OsVmPhysPagesFreeContiguous(page, ONE_PAGE);  //释放这页内存
-            LOS_AtomicSet(&page->refCounts, 0);
+            LOS_AtomicSet(&page->refCounts, 0); //重置引用计数
             LOS_SpinUnlockRestore(&seg->freeListLock, intSave);
         }
         count++;
     }
 
-    return count;
+    return count; //返回成功释放的内存页数目
 }
 
 #ifdef __cplusplus
