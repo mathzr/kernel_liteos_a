@@ -55,11 +55,11 @@ typedef struct {
 } CmdKeyLink;
 
 //每行能打印的字符串个数是lineCap
-//所以每打印lineCap个字符串都得换行了
+//所以每打印lineCap个字符串就得换行了
 #define NEED_NEW_LINE(timesPrint, lineCap) ((timesPrint) % (lineCap) == 0)
 
 //每行能打印的字符串数与屏幕行数的乘积为每一屏最多能打印的字符串个数
-//超过这个数目一屏打印不下
+//超过这个数目的字符串一屏打印不完
 #define SCREEN_IS_FULL(timesPrint, lineCap) ((timesPrint) >= ((lineCap) * DEFAULT_SCREEN_HEIGNT))
 
 extern unsigned int OsCmdExec(CmdParsed *cmdParsed, char *cmdStr);

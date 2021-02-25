@@ -41,32 +41,34 @@ extern "C" {
 /*
  * Filter out double quote or single-quoted strings at both ends
  */
- //拷贝字符串，忽略单引号和双引号
+ //创建字符串副本，忽略单引号和双引号
 char *OsCmdParseStrdup(const char *str)
 {
     char *tempStr = NULL;
     char *newStr = NULL;
 
+	//新字符串空间与原字符串空间尺寸保持一致
     newStr = (char *)malloc(strlen(str) + 1);
     if (newStr == NULL) {
         return NULL;
     }
 
     tempStr = newStr;
-	//遍历字符串
+	//遍历原字符串
     for (; *str != '\0'; str++) {
         if ((*str == '\"') || (*str == '\'')) {
             continue; //除了单引号和双引号
         }
-		//其它字符都拷贝
+		//其它字符都拷贝到新空间
         *newStr = *str;
         newStr++;
     }
     *newStr = '\0';  //别忘记字符串结束符
-    return tempStr;
+    return tempStr;  //返回新空间首地址，即新字符串
 }
 
-//拷贝并去除命令行参数中的单双引号
+//创建paraTokenStr指定的命令行参数对应的副本，并忽略单双引号
+//将副本存入*value
 unsigned int OsCmdParseParaGet(char **value, const char *paraTokenStr)
 {
     if ((paraTokenStr == NULL) || (value == NULL)) {
@@ -79,7 +81,7 @@ unsigned int OsCmdParseParaGet(char **value, const char *paraTokenStr)
     return SH_OK;
 }
 
-//提取命令行中的下一个参数，以空格分隔
+//创建命令行参数token副本，忽略单双引号，并存入cmdParsed
 unsigned int OsCmdParseOneToken(CmdParsed *cmdParsed, unsigned int index, const char *token)
 {
     unsigned int ret = SH_OK;
@@ -91,7 +93,7 @@ unsigned int OsCmdParseOneToken(CmdParsed *cmdParsed, unsigned int index, const 
 
     if (index == 0) {
         if (cmdParsed->cmdType != CMD_TYPE_STD) {
-            return ret;  //只支持标准命令的解析
+            return ret;  //OsStrSeparateTabStrGet函数中已经设置成CMD_TYPE_STD，正常情况下走不到这个逻辑
         }
     }
 
@@ -108,43 +110,44 @@ unsigned int OsCmdParseOneToken(CmdParsed *cmdParsed, unsigned int index, const 
 }
 
 
-//按split字符来拆分字符串为字符串数组
+//以split字符来拆分cmdStr字符串
+//并存入cmdParsed字符串数组中，以及剥离单双引号之类的事情
 unsigned int OsCmdTokenSplit(char *cmdStr, char split, CmdParsed *cmdParsed)
 {
     enum {
-        STAT_INIT,
-        STAT_TOKEN_IN,
-        STAT_TOKEN_OUT
+        STAT_INIT,  //命令行解析的初始状态
+        STAT_TOKEN_IN, //当前正在读取一个词组的过程中
+        STAT_TOKEN_OUT //当前刚读完一个词组
     } state = STAT_INIT;
-    unsigned int count = 0;
-    char *p = NULL;
-    char *token = cmdStr;  //当前词组
-    unsigned int ret = SH_OK;
-    bool quotes = FALSE;
+    unsigned int count = 0; //即将解析的词组编号
+    char *p = NULL;  //即将读取的字符位置
+    char *token = cmdStr;  //当前正在解析的词组
+    unsigned int ret = SH_OK; //解析成功or失败
+    bool quotes = FALSE; //当前是在双引号内还还是双引号外
 
     if (cmdStr == NULL) {
         return (unsigned int)SH_ERROR;
     }
 
-	//遍历字符串
+	//遍历命令字符串，一旦解析出错，则解析停止
     for (p = cmdStr; (*p != '\0') && (ret == SH_OK); p++) {
         if (*p == '\"') {
-            SWITCH_QUOTES_STATUS(quotes); //遇到双引号，则切换状态，引号内or引号外
+            SWITCH_QUOTES_STATUS(quotes); //遇到双引号，则切换状态，引号内外转换
         }
         switch (state) {
             case STAT_INIT:
             case STAT_TOKEN_IN:
                 if ((*p == split) && QUOTES_STATUS_CLOSE(quotes)) {
 					//在引号外，将split字符切换成空字符
-                    *p = '\0';
-					//并将当前词组记录为一个命令行参数
+                    *p = '\0'; //这个字符前面刚好形成一个词组
+					//并将这个词组拷贝为一个命令行参数
                     ret = OsCmdParseOneToken(cmdParsed, count++, token);
                     state = STAT_TOKEN_OUT;  //切换成当前在词组外状态
                 }
                 break;
             case STAT_TOKEN_OUT:
                 if (*p != split) {
-                    token = p; //分隔符之后的普通字符，代表下一个词组开始
+                    token = p; //分隔符之后的普通字符，代表下一个词组开始，记录下词组的地址
                     state = STAT_TOKEN_IN; //进入词组内状态
                 }
                 break;

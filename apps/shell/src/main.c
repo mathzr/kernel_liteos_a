@@ -42,7 +42,7 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
-ShellCB *g_shellCB = NULL;
+ShellCB *g_shellCB = NULL; //shell控制块
 
 ShellCB *OsGetShellCb()
 {
@@ -100,6 +100,8 @@ OUT:
     return ret;
 }
 
+
+//   /bin/shell进程入口函数
 int main()
 {
     int ret = SH_NOK;
@@ -131,12 +133,13 @@ int main()
     if (ret != SH_OK) {
         goto ERR_OUT3;
     }
+	//shell的工作目录初始化为根目录
     (void)strncpy_s(shellCB->shellWorkingDirectory, PATH_MAX, "/", 2); /* 2:space for "/" */
 
     sem_init(&shellCB->shellSem, 0, 0);
 
     g_shellCB = shellCB;
-	//创建2个线程来
+	//创建2个线程来处理shell的具体事务
     return OsShellCreateTask(shellCB);
 
 ERR_OUT3:

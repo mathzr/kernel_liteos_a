@@ -43,10 +43,11 @@ int main(int argc, char * const *argv)
     int ret;
     const char *shellPath = "/bin/shell";
 
-    ret = fork();
+    ret = fork(); //创建子进程
     if (ret < 0) {
         printf("Failed to fork for shell\n");
     } else if (ret == 0) {
+    	//并在子进程中执行/bin/shell程序
         (void)execve(shellPath, NULL, NULL);
         exit(0);  //shell进程退出了，整个系统也退出了
     }

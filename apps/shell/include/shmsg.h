@@ -40,15 +40,17 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
-#define SHELL_ENTRY_STACKSIZE   0x1000
-#define SHELL_TASK_STACKSIZE    0x3000
+#define SHELL_ENTRY_STACKSIZE   0x1000  //命令解析线程栈尺寸
+#define SHELL_TASK_STACKSIZE    0x3000  //命令执行线程栈尺寸
 
+//可执行文件./file需要更换成exec path/file的形式
 #define SHELL_EXEC_COMMAND          "exec "
 #define SHELL_EXEC_COMMAND_BYTES    5
 
 #define CONSOLE_IOC_MAGIC   'c'
 #define CONSOLE_CONTROL_REG_USERTASK _IO(CONSOLE_IOC_MAGIC, 7)
 
+//命令行提示符
 #define COLOR_NONE     "\e[0m"
 #define COLOR_RED      "\e[0;31m"
 #define COLOR_L_RED    "\e[1;31m"
