@@ -49,7 +49,7 @@ extern "C" {
 #define SHELL_INIT_MAGIC_FLAG 0xABABABAB
 #define CTRL_C 0x03 /* 0x03: ctrl+c ASCII */
 
-STATIC CmdModInfo g_cmdInfo;
+STATIC CmdModInfo g_cmdInfo; //shell模块的全局信息
 
 LOS_HAL_TABLE_BEGIN(g_shellcmd, shellcmd);
 LOS_HAL_TABLE_END(g_shellcmdEnd, shellcmd);
@@ -331,6 +331,7 @@ STATIC VOID OsCompleteStr(const CHAR *result, const CHAR *target, CHAR *cmdKey, 
     }
 }
 
+//命令自动补全
 STATIC INT32 OsTabMatchCmd(CHAR *cmdKey, UINT32 *len)
 {
     INT32 count = 0;
@@ -347,37 +348,42 @@ STATIC INT32 OsTabMatchCmd(CHAR *cmdKey, UINT32 *len)
         return (INT32)OS_ERROR;
     }
 
+	//遍历命令列表，命令字符串以字典序排列
     LOS_DL_LIST_FOR_EACH_ENTRY(curCmdItem, &(g_cmdInfo.cmdList.list), CmdItemNode, list) {
         if ((curCmdItem == NULL) || (curCmdItem->cmd == NULL)) {
             return -1;
         }
 
         if (strncmp(cmdMajor, curCmdItem->cmd->cmdKey, strlen(cmdMajor)) > 0) {
-            continue;
+            continue; //命令列表前面一部分基本上无法匹配
         }
 
         if (strncmp(cmdMajor, curCmdItem->cmd->cmdKey, strlen(cmdMajor)) != 0) {
-            break;
+            break;  //命令子串不匹配，那么后面的就不会匹配了
         }
 
+		//如果匹配，会连续匹配1项到多项
         if (count == 0) {
-            cmdItemGuard = curCmdItem;
+            cmdItemGuard = curCmdItem; //记录下第一个匹配的项，有可能是精确匹配
         }
         ++count;
     }
 
     if (cmdItemGuard == NULL) {
-        return 0;
+        return 0; //没有匹配项
     }
 
     if (count == 1) {
+		//只匹配了1项，直接自动补全
         OsCompleteStr(cmdItemGuard->cmd->cmdKey, cmdMajor, cmdKey, len);
     }
 
     ret = count;
     if (count > 1) {
+		//匹配了多项
         PRINTK("\n");
         while (count--) {
+			//那么应该把每一个匹配的项打印出来，这些项在命令列表中是紧挨着的
             PRINTK("%s  ", cmdItemGuard->cmd->cmdKey);
             cmdItemGuard = LOS_DL_LIST_ENTRY(cmdItemGuard->list.pstNext, CmdItemNode, list);
         }
@@ -387,6 +393,8 @@ STATIC INT32 OsTabMatchCmd(CHAR *cmdKey, UINT32 *len)
     return ret;
 }
 
+
+//文件或目录的自动补全
 STATIC INT32 OsTabMatchFile(CHAR *cmdKey, UINT32 *len)
 {
     UINT32 maxLen = 0;
@@ -501,6 +509,9 @@ LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdKeyShift(const CHAR *cmdKey, CHAR *cmdOut, UI
     return LOS_OK;
 }
 
+
+//检查命令的有效性，只允许字母数字下划线短横线
+//不允许数字结尾
 LITE_OS_SEC_TEXT_MINOR BOOL OsCmdKeyCheck(const CHAR *cmdKey)
 {
     const CHAR *temp = cmdKey;
@@ -540,6 +551,7 @@ LITE_OS_SEC_TEXT_MINOR BOOL OsCmdKeyCheck(const CHAR *cmdKey)
     return TRUE;
 }
 
+//命令行自动补全功能
 LITE_OS_SEC_TEXT_MINOR INT32 OsTabCompletion(CHAR *cmdKey, UINT32 *len)
 {
     INT32 count = 0;
@@ -552,22 +564,28 @@ LITE_OS_SEC_TEXT_MINOR INT32 OsTabCompletion(CHAR *cmdKey, UINT32 *len)
 
     /* cut left space */
     while (*cmdMainStr == 0x20) {
-        cmdMainStr++;
+        cmdMainStr++;  //跳过起始位置的空格
     }
 
     /* try to find space in remain */
-    space = strrchr(cmdMainStr, 0x20);
+    space = strrchr(cmdMainStr, 0x20); //寻找tab键之前的空格
     if ((space == NULL) && (*cmdMainStr != '\0')) {
+		//没有找到空格，那么现在输入的整体就是命令的一部分
+		//直接做命令的自动补全
         count = OsTabMatchCmd(cmdKey, len);
     }
 
     if (count == 0) {
+		//没有匹配的命令，则做文件或目录名补全
+		//或者找到了tab键之前的空格，也做目录或文件名补全
         count = OsTabMatchFile(cmdKey, len);
     }
 
     return count;
 }
 
+
+//以字典序升序插入命令到命令列表中
 LITE_OS_SEC_TEXT_MINOR VOID OsCmdAscendingInsert(CmdItemNode *cmd)
 {
     CmdItemNode *cmdItem = NULL;
@@ -577,24 +595,28 @@ LITE_OS_SEC_TEXT_MINOR VOID OsCmdAscendingInsert(CmdItemNode *cmd)
         return;
     }
 
+	//倒序遍历命令列表
     for (cmdItem = LOS_DL_LIST_ENTRY((&g_cmdInfo.cmdList.list)->pstPrev, CmdItemNode, list);
          &cmdItem->list != &(g_cmdInfo.cmdList.list);) {
         cmdNext = LOS_DL_LIST_ENTRY(cmdItem->list.pstPrev, CmdItemNode, list);
         if (&cmdNext->list != &(g_cmdInfo.cmdList.list)) {
             if ((strncmp(cmdItem->cmd->cmdKey, cmd->cmd->cmdKey, strlen(cmd->cmd->cmdKey)) >= 0) &&
                 (strncmp(cmdNext->cmd->cmdKey, cmd->cmd->cmdKey, strlen(cmd->cmd->cmdKey)) < 0)) {
+                //cmd正好处于cmdNext和cmdItem之间，将cmd插入cmdItem之前
                 LOS_ListTailInsert(&(cmdItem->list), &(cmd->list));
                 return;
             }
             cmdItem = cmdNext;
         } else {
             if (strncmp(cmd->cmd->cmdKey, cmdItem->cmd->cmdKey, strlen(cmd->cmd->cmdKey)) > 0) {
-                cmdItem = cmdNext;
+				//列表中当前只有1个表项，且新加入的表项比它大，所以需要插入链表尾部
+                cmdItem = cmdNext; 
             }
             break;
         }
     }
 
+	
     LOS_ListTailInsert(&(cmdItem->list), &(cmd->list));
 }
 
@@ -646,10 +668,12 @@ LITE_OS_SEC_TEXT_MINOR VOID OsShellKeyDeInit(CmdKeyLink *cmdKeyLink)
     (VOID)LOS_MemFree(m_aucSysMem0, cmdKeyLink);
 }
 
+//注册当前的所有系统命令，并将注册后的命令按字典序升序排列
 LITE_OS_SEC_TEXT_MINOR UINT32 OsShellSysCmdRegister(VOID)
 {
     UINT32 i;
     UINT8 *cmdItemGroup = NULL;
+	//系统中当前命令数目
     UINT32 index = ((UINTPTR)(&g_shellcmdEnd) - (UINTPTR)(&g_shellcmd[0])) / sizeof(CmdItem);
     CmdItemNode *cmdItem = NULL;
 
@@ -659,6 +683,7 @@ LITE_OS_SEC_TEXT_MINOR UINT32 OsShellSysCmdRegister(VOID)
         return (UINT32)OS_ERROR;
     }
 
+	//遍历所有命令，升序排列命令
     for (i = 0; i < index; ++i) {
         cmdItem = (CmdItemNode *)(cmdItemGroup + i * sizeof(CmdItemNode));
         cmdItem->cmd = &g_shellcmd[i];
@@ -740,6 +765,8 @@ END:
     return;
 }
 
+
+//执行命令
 LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdExec(CmdParsed *cmdParsed, CHAR *cmdStr)
 {
     UINT32 ret;
@@ -752,23 +779,26 @@ LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdExec(CmdParsed *cmdParsed, CHAR *cmdStr)
         return (UINT32)OS_ERROR;
     }
 
+	//先解析命令，生成参数列表
     ret = OsCmdParse(cmdStr, cmdParsed);
     if (ret != LOS_OK) {
         goto OUT;
     }
 
+	//遍历命令列表，找到合适的命令
     LOS_DL_LIST_FOR_EACH_ENTRY(curCmdItem, &(g_cmdInfo.cmdList.list), CmdItemNode, list) {
         cmdKey = curCmdItem->cmd->cmdKey;
-        if ((cmdParsed->cmdType == curCmdItem->cmd->cmdType) &&
-            (strlen(cmdKey) == strlen(cmdParsed->cmdKeyword)) &&
-            (strncmp(cmdKey, (CHAR *)(cmdParsed->cmdKeyword), strlen(cmdKey)) == 0)) {
-            cmdHook = curCmdItem->cmd->cmdHook;
+        if ((cmdParsed->cmdType == curCmdItem->cmd->cmdType) && //类型匹配
+            (strlen(cmdKey) == strlen(cmdParsed->cmdKeyword)) && //命令长度匹配
+            (strncmp(cmdKey, (CHAR *)(cmdParsed->cmdKeyword), strlen(cmdKey)) == 0)) { //命令字符串匹配
+            cmdHook = curCmdItem->cmd->cmdHook; //获取本命令处理函数
             break;
         }
     }
 
     ret = OS_ERROR;
     if (cmdHook != NULL) {
+		//调用处理函数做具体命令的处理，形式上有点像main函数
         ret = (cmdHook)(cmdParsed->paramCnt, (const CHAR **)cmdParsed->paramArray);
     }
 
@@ -786,10 +816,10 @@ OUT:
 LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdInit(VOID)
 {
     UINT32 ret;
-    LOS_ListInit(&(g_cmdInfo.cmdList.list));
-    g_cmdInfo.listNum = 0;
-    g_cmdInfo.initMagicFlag = SHELL_INIT_MAGIC_FLAG;
-    ret = LOS_MuxInit(&g_cmdInfo.muxLock, NULL);
+    LOS_ListInit(&(g_cmdInfo.cmdList.list));  //初始化空命令列表
+    g_cmdInfo.listNum = 0; //列表中现在无命令
+    g_cmdInfo.initMagicFlag = SHELL_INIT_MAGIC_FLAG;  //初始化完成标志
+    ret = LOS_MuxInit(&g_cmdInfo.muxLock, NULL); //命令列表互斥访问锁的初始化
     if (ret != LOS_OK) {
         PRINT_ERR("Create mutex for shell cmd info failed\n");
         return OS_ERROR;
@@ -797,6 +827,7 @@ LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdInit(VOID)
     return LOS_OK;
 }
 
+//创建一个具体的命令
 STATIC UINT32 OsCmdItemCreate(CmdType cmdType, const CHAR *cmdKey, UINT32 paraNum, CmdCallBackFunc cmdProc)
 {
     CmdItem *cmdItem = NULL;
@@ -814,21 +845,23 @@ STATIC UINT32 OsCmdItemCreate(CmdType cmdType, const CHAR *cmdKey, UINT32 paraNu
         return OS_ERRNO_SHELL_CMDREG_MEMALLOC_ERROR;
     }
     (VOID)memset_s(cmdItemNode, sizeof(CmdItemNode), '\0', sizeof(CmdItemNode));
+	
     cmdItemNode->cmd = cmdItem;
-    cmdItemNode->cmd->cmdHook = cmdProc;
-    cmdItemNode->cmd->paraNum = paraNum;
-    cmdItemNode->cmd->cmdType = cmdType;
-    cmdItemNode->cmd->cmdKey = cmdKey;
+    cmdItemNode->cmd->cmdHook = cmdProc;  //命令处理函数
+    cmdItemNode->cmd->paraNum = paraNum;  //支持的参数个数
+    cmdItemNode->cmd->cmdType = cmdType;  //命令类型 ， 标准,show, 扩展
+    cmdItemNode->cmd->cmdKey = cmdKey;    //命令关键字(字符串)
 
     (VOID)LOS_MuxLock(&g_cmdInfo.muxLock, LOS_WAIT_FOREVER);
-    OsCmdAscendingInsert(cmdItemNode);
-    g_cmdInfo.listNum++;
+    OsCmdAscendingInsert(cmdItemNode); //插入命令队列
+    g_cmdInfo.listNum++;  //命令数目增加
     (VOID)LOS_MuxUnlock(&g_cmdInfo.muxLock);
 
     return LOS_OK;
 }
 
 /* open API */
+//向系统注册shell命令
 LITE_OS_SEC_TEXT_MINOR UINT32 osCmdReg(CmdType cmdType, const CHAR *cmdKey, UINT32 paraNum, CmdCallBackFunc cmdProc)
 {
     CmdItemNode *cmdItemNode = NULL;
@@ -836,6 +869,7 @@ LITE_OS_SEC_TEXT_MINOR UINT32 osCmdReg(CmdType cmdType, const CHAR *cmdKey, UINT
     (VOID)LOS_MuxLock(&g_cmdInfo.muxLock, LOS_WAIT_FOREVER);
     if (g_cmdInfo.initMagicFlag != SHELL_INIT_MAGIC_FLAG) {
         (VOID)LOS_MuxUnlock(&g_cmdInfo.muxLock);
+		//shell初始化以后才能注册
         PRINT_ERR("[%s] shell is not yet initialized!\n", __FUNCTION__);
         return OS_ERRNO_SHELL_NOT_INIT;
     }
@@ -853,20 +887,23 @@ LITE_OS_SEC_TEXT_MINOR UINT32 osCmdReg(CmdType cmdType, const CHAR *cmdKey, UINT
     }
 
     if (OsCmdKeyCheck(cmdKey) != TRUE) {
+		//命令关键字字符串非法
         return OS_ERRNO_SHELL_CMDREG_CMD_ERROR;
     }
 
     (VOID)LOS_MuxLock(&g_cmdInfo.muxLock, LOS_WAIT_FOREVER);
+	//遍历当前命令列表，判断命令是否已经存在
     LOS_DL_LIST_FOR_EACH_ENTRY(cmdItemNode, &(g_cmdInfo.cmdList.list), CmdItemNode, list) {
         if ((cmdType == cmdItemNode->cmd->cmdType) &&
             ((strlen(cmdKey) == strlen(cmdItemNode->cmd->cmdKey)) &&
             (strncmp((CHAR *)(cmdItemNode->cmd->cmdKey), cmdKey, strlen(cmdKey)) == 0))) {
             (VOID)LOS_MuxUnlock(&g_cmdInfo.muxLock);
-            return OS_ERRNO_SHELL_CMDREG_CMD_EXIST;
+            return OS_ERRNO_SHELL_CMDREG_CMD_EXIST; //命令已存在
         }
     }
     (VOID)LOS_MuxUnlock(&g_cmdInfo.muxLock);
 
+	//注册命令
     return OsCmdItemCreate(cmdType, cmdKey, paraNum, cmdProc);
 }
 

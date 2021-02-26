@@ -46,7 +46,10 @@
 extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
+//命令行内核日志处理
 
+
+//模块标识
 typedef enum {
     MODULE0 = 0,
     MODULE1 = 1,
@@ -55,10 +58,12 @@ typedef enum {
     MODULE4 = 4,
 } MODULE_FLAG;
 
+
+//日志管理控制块
 typedef struct {
-    INT32 module_level;
-    INT32 trace_level;
-    FILE *fp;
+    INT32 module_level; //模块级别
+    INT32 trace_level;  //调试级别
+    FILE *fp;  //日志文件
 } Logger;
 
 STATIC INT32 g_tracelevel;
@@ -75,11 +80,12 @@ STATIC INLINE INT32 OsLkTraceLvGet(VOID)
     return g_tracelevel;
 }
 
-const CHAR *OsLkCurLogLvGet(VOID)
+const CHAR *OsLkCurLogLvGet(VOID)  //获取当前日志等级
 {
     return OsLogLvGet(g_tracelevel);
 }
 
+//设置trace等级
 VOID OsLkTraceLvSet(INT32 level)
 {
     g_tracelevel = level;
@@ -87,6 +93,7 @@ VOID OsLkTraceLvSet(INT32 level)
     return;
 }
 
+//设置模块等级
 VOID OsLkModuleLvSet(INT32 level)
 {
     g_modulelevel = level;
@@ -94,42 +101,48 @@ VOID OsLkModuleLvSet(INT32 level)
     return;
 }
 
+//读取模块等级
 INT32 OsLkModuleLvGet(VOID)
 {
     return g_modulelevel;
 }
 
+
+//设置日志文件名称
 VOID OsLkLogFileSet(const CHAR *str)
 {
     FILE *fp = NULL;
-    FILE *oldfp = g_logger.fp;
+    FILE *oldfp = g_logger.fp; //暂存旧日志文件
 
     if (str == NULL) {
         return;
     }
-    fp = fopen(str, "w+");
+    fp = fopen(str, "w+"); //创建并打开新日志文件
     if (fp == NULL) {
         printf("Error can't open the %s file\n",str);
         return;
     }
 
-    g_logger.fp = fp;
+    g_logger.fp = fp; //记录新创建的日志文件
     if (oldfp != NULL) {
-        fclose(oldfp);
+        fclose(oldfp); //关闭旧日志文件
     }
 }
 
+//获取当前日志文件描述符
 FILE *OsLogFpGet(VOID)
 {
     return g_logger.fp;
 }
 
+//log命令的处理入口
 INT32 CmdLog(INT32 argc, const CHAR **argv)
 {
     size_t level;
     size_t module;
     CHAR *p = NULL;
 
+	//log命令使用提示文本
     if ((argc != 2) || (argv == NULL)) { /* 2:count of parameter */
         PRINTK("Usage: log level <num>\n");
         PRINTK("Usage: log module <num>\n");
@@ -143,7 +156,7 @@ INT32 CmdLog(INT32 argc, const CHAR **argv)
             PRINTK("current log level %s\n", OsLkCurLogLvGet());
             PRINTK("log %s [num] can access as 0:EMG 1:COMMON 2:ERROR 3:WARN 4:INFO 5:DEBUG\n", argv[0]);
         } else {
-            OsLkTraceLvSet(level);
+            OsLkTraceLvSet(level); //设置log level num
             PRINTK("Set current log level %s\n", OsLkCurLogLvGet());
         }
     } else if (!strncmp(argv[0], "module", strlen(argv[0]) + 1)) {
@@ -153,12 +166,12 @@ INT32 CmdLog(INT32 argc, const CHAR **argv)
             PRINTK("not support yet\n");
             return -1;
         } else {
-            OsLkModuleLvSet(module);
+            OsLkModuleLvSet(module); //设置log moudule num
             PRINTK("not support yet\n");
         }
     } else if (!strncmp(argv[0], "path", strlen(argv[0]) + 1)) {
-        OsLkLogFileSet(argv[1]);
-        PRINTK("not support yet\n");
+        OsLkLogFileSet(argv[1]);  //设置log path ...
+        PRINTK("not support yet\n"); 
     } else {
         PRINTK("Usage: log level <num>\n");
         PRINTK("Usage: log module <num>\n");
@@ -170,6 +183,7 @@ INT32 CmdLog(INT32 argc, const CHAR **argv)
 }
 
 #ifdef LOSCFG_SHELL_DMESG
+//记录日志等级字符串
 STATIC INLINE VOID OsLogCycleRecord(INT32 level)
 {
     UINT32 tmpLen;
@@ -181,23 +195,25 @@ STATIC INLINE VOID OsLogCycleRecord(INT32 level)
 }
 #endif
 
+//内核日志默认输出函数
 VOID OsLkDefaultFunc(INT32 level, const CHAR *func, INT32 line, const CHAR *fmt, va_list ap)
 {
     if (level > OsLkTraceLvGet()) {
 #ifdef LOSCFG_SHELL_DMESG
         if ((UINT32)level <= OsDmesgLvGet()) {
             OsLogCycleRecord(level);
-            DmesgPrintf(fmt, ap);
+            DmesgPrintf(fmt, ap);  //输出到dmesg缓存
         }
 #endif
         return;
     }
     if ((level != LOS_COMMON_LEVEL) && ((level > LOS_EMG_LEVEL) && (level <= LOS_TRACE_LEVEL))) {
-        dprintf("[%s]", OsLogLvGet(level));
+        dprintf("[%s]", OsLogLvGet(level)); //输出到控制台
     }
-    LkDprintf(fmt, ap);
+    LkDprintf(fmt, ap); //输出到控制台
 }
 
+//内核日志默认输出函数--变参版本
 VOID LOS_LkPrint(INT32 level, const CHAR *func, INT32 line, const CHAR *fmt, ...)
 {
     va_list ap;
@@ -225,7 +241,7 @@ VOID OsLkLoggerInit(const CHAR *str)
 }
 
 #ifdef LOSCFG_SHELL_CMD_DEBUG
-SHELLCMD_ENTRY(log_shellcmd, CMD_TYPE_EX, "log", 1, (CmdCallBackFunc)CmdLog);
+SHELLCMD_ENTRY(log_shellcmd, CMD_TYPE_EX, "log", 1, (CmdCallBackFunc)CmdLog); //注册log命令
 #endif
 
 #ifdef __cplusplus

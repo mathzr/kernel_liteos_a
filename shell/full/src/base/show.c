@@ -46,6 +46,7 @@ extern "C" {
 
 STATIC BOOL g_shellSourceFlag = FALSE;
 
+//命令处理模块初始化
 STATIC UINT32 OsShellCmdInit(VOID)
 {
     UINT32 ret = OsCmdInit();
@@ -56,6 +57,7 @@ STATIC UINT32 OsShellCmdInit(VOID)
     return OsShellSysCmdRegister();
 }
 
+//创建命令处理相关的任务
 STATIC UINT32 OsShellCreateTask(ShellCB *shellCB)
 {
     UINT32 ret = ShellTaskInit(shellCB);
@@ -66,13 +68,15 @@ STATIC UINT32 OsShellCreateTask(ShellCB *shellCB)
     return ShellEntryInit(shellCB);
 }
 
+//命令终端初始化
 STATIC UINT32 OsShellSourceInit(INT32 consoleId)
 {
     UINT32 ret = LOS_NOK;
-    CONSOLE_CB *consoleCB = OsGetConsoleByID(consoleId);
+    CONSOLE_CB *consoleCB = OsGetConsoleByID(consoleId);  //控制台串口或者telnet
     if ((consoleCB == NULL) || (consoleCB->shellHandle != NULL)) {
         return LOS_NOK;
     }
+	//创建命令行处理控制块
     consoleCB->shellHandle = LOS_MemAlloc((VOID *)m_aucSysMem0, sizeof(ShellCB));
     if (consoleCB->shellHandle == NULL) {
         return LOS_NOK;
@@ -82,7 +86,7 @@ STATIC UINT32 OsShellSourceInit(INT32 consoleId)
         goto ERR_OUT1;
     }
 
-    shellCB->consoleID = (UINT32)consoleId;
+    shellCB->consoleID = (UINT32)consoleId; //控制台ID
     ret = (UINT32)pthread_mutex_init(&shellCB->keyMutex, NULL);
     if (ret != LOS_OK) {
         goto ERR_OUT1;
@@ -106,9 +110,11 @@ STATIC UINT32 OsShellSourceInit(INT32 consoleId)
      * serial console enabled, it is required
      * to create Shell task in kernel for it.
      */
+     //如果没有rootfs，那么就不会有/bin/shell程序文件，也不会有shell进程
+     //这个时候需要创建内核线程来处理命令行逻辑
     if (consoleId == CONSOLE_TELNET || consoleId == CONSOLE_SERIAL) {
 #else
-    if (consoleId == CONSOLE_TELNET) {
+    if (consoleId == CONSOLE_TELNET) {  //否则，只需要创建telnet终端对应的shell。串口终端由/bin/shell进程处理
 #endif
         ret = OsShellCreateTask(shellCB);
         if (ret != LOS_OK) {
@@ -130,20 +136,21 @@ ERR_OUT1:
     return ret;
 }
 
-
+//创建并初始化shell终端
 UINT32 OsShellInit(INT32 consoleId)
 {
     if (g_shellSourceFlag == FALSE) {
         UINT32 ret = OsShellCmdInit();
         if (ret == LOS_OK) {
-            g_shellSourceFlag = TRUE;
+            g_shellSourceFlag = TRUE;  //shell终端已创建
         } else {
             return ret;
         }
     }
-    return OsShellSourceInit(consoleId);
+    return OsShellSourceInit(consoleId); //初始化shell终端
 }
 
+//删除shell终端
 INT32 OsShellDeinit(INT32 consoleId)
 {
     CONSOLE_CB *consoleCB = NULL;
@@ -168,6 +175,7 @@ INT32 OsShellDeinit(INT32 consoleId)
     return 0;
 }
 
+//获取shell当前的工作目录
 CHAR *OsShellGetWorkingDirtectory(VOID)
 {
     CONSOLE_CB *consoleCB = OsGetConsoleByTaskID(OsCurrTaskGet()->taskID);

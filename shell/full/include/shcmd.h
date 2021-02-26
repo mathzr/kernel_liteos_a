@@ -64,10 +64,10 @@ typedef struct {
 
 /* global info for shell module */
 typedef struct {
-    CmdItemNode cmdList;
-    UINT32 listNum;
-    UINT32 initMagicFlag;
-    LosMux muxLock;
+    CmdItemNode cmdList; //命令列表，含所有命令
+    UINT32 listNum; //命令数目
+    UINT32 initMagicFlag; //是否已初始化
+    LosMux muxLock;  //互斥访问锁
     CmdVerifyTransID transIdHook;
 } CmdModInfo;
 

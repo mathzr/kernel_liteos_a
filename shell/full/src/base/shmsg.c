@@ -52,6 +52,9 @@
 extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
+//本文件中的多数函数与用户态/bin/shell程序中的相关代码逻辑一致，少数差异主要体现在本网将的运行环境为内核线程环境
+//如内存申请和释放不同：   本文用LOS_MemAlloc LOS_MemFree，/bin/shell中使用malloc, free
+//打印日志方法不同， printf vs PRINTK
 
 CHAR *ShellGetInputBuf(ShellCB *shellCB)
 {
@@ -70,6 +73,7 @@ CHAR *ShellGetInputBuf(ShellCB *shellCB)
 
     return cmdNode->cmdString;
 }
+
 
 STATIC VOID ShellSaveHistoryCmd(const CHAR *string, ShellCB *shellCB)
 {
@@ -209,6 +213,7 @@ LITE_OS_SEC_TEXT_MINOR VOID ShellCmdLineParse(CHAR c, pf_OUTPUT outputFunc, Shel
     shellCB->shellKeyType = STAT_NOMAL_KEY;
 }
 
+//查找指定的命令在内核命令列表中是否存在，如果存在，获取其在内核中注册的类型信息
 LITE_OS_SEC_TEXT_MINOR UINT32 ShellMsgTypeGet(CmdParsed *cmdParsed, const CHAR *cmdType)
 {
     CmdItemNode *curCmdItem = (CmdItemNode *)NULL;
@@ -221,12 +226,13 @@ LITE_OS_SEC_TEXT_MINOR UINT32 ShellMsgTypeGet(CmdParsed *cmdParsed, const CHAR *
     }
 
     len = strlen(cmdType);
+	//遍历内核中命令列表
     LOS_DL_LIST_FOR_EACH_ENTRY(curCmdItem, &(cmdInfo->cmdList.list), CmdItemNode, list) {
-        if ((len == strlen(curCmdItem->cmd->cmdKey)) &&
-            (strncmp((CHAR *)(curCmdItem->cmd->cmdKey), cmdType, len) == 0)) {
-            minLen = (len < CMD_KEY_LEN) ? len : CMD_KEY_LEN;
-            (VOID)memcpy_s((CHAR *)(cmdParsed->cmdKeyword), CMD_KEY_LEN, cmdType, minLen);
-            cmdParsed->cmdType = curCmdItem->cmd->cmdType;
+        if ((len == strlen(curCmdItem->cmd->cmdKey)) && //命令字符串长度相同
+            (strncmp((CHAR *)(curCmdItem->cmd->cmdKey), cmdType, len) == 0)) { //命令字符串内容相同
+            minLen = (len < CMD_KEY_LEN) ? len : CMD_KEY_LEN; //命令长度不能超过CMD_KEY_LEN
+            (VOID)memcpy_s((CHAR *)(cmdParsed->cmdKeyword), CMD_KEY_LEN, cmdType, minLen); //保存命令字符串
+            cmdParsed->cmdType = curCmdItem->cmd->cmdType; //保存命令类型
             return LOS_OK;
         }
     }
@@ -270,7 +276,8 @@ STATIC UINT32 ShellMsgNameGetAndExec(CmdParsed *cmdParsed, const CHAR *output, U
     if (ret != LOS_OK) {
         PRINTK("%s:command not found", msgName);
     } else {
-        (VOID)OsCmdExec(cmdParsed, (CHAR *)output);
+    	//当成功获取到命令类型后，就执行这条命令
+        (VOID)OsCmdExec(cmdParsed, (CHAR *)output); 
     }
     (VOID)LOS_MemFree(m_aucSysMem0, msgName);
     return ret;
@@ -332,12 +339,14 @@ END:
 }
 
 #ifdef LOSCFG_FS_VFS
+//内核线程主入口，shell命令行解析
 LITE_OS_SEC_TEXT_MINOR UINT32 ShellEntry(UINTPTR param)
 {
     CHAR ch;
     INT32 n = 0;
     ShellCB *shellCB = (ShellCB *)param;
 
+	//获取shell控制台
     CONSOLE_CB *consoleCB = OsGetConsoleByID((INT32)shellCB->consoleID);
     if (consoleCB == NULL) {
         PRINT_ERR("Shell task init error!\n");
@@ -348,12 +357,12 @@ LITE_OS_SEC_TEXT_MINOR UINT32 ShellEntry(UINTPTR param)
 
     while (1) {
 #ifdef LOSCFG_PLATFORM_CONSOLE
-        if (!IsConsoleOccupied(consoleCB)) {
+        if (!IsConsoleOccupied(consoleCB)) {  //控制台被其它应用占有的话，就不能运行shell
 #endif
             /* is console ready for shell ? */
             n = read(consoleCB->fd, &ch, 1);
             if (n == 1) {
-                ShellCmdLineParse(ch, (pf_OUTPUT)dprintf, shellCB);
+                ShellCmdLineParse(ch, (pf_OUTPUT)dprintf, shellCB); //处理用户输入的字符
             }
             if (is_nonblock(consoleCB)) {
                 LOS_Msleep(50); /* 50: 50MS for sleep */
@@ -365,6 +374,7 @@ LITE_OS_SEC_TEXT_MINOR UINT32 ShellEntry(UINTPTR param)
 }
 #endif
 
+//处理shell命令
 STATIC VOID ShellCmdProcess(ShellCB *shellCB)
 {
     CHAR *buf = NULL;
@@ -379,6 +389,7 @@ STATIC VOID ShellCmdProcess(ShellCB *shellCB)
     }
 }
 
+//处理shell命令
 LITE_OS_SEC_TEXT_MINOR UINT32 ShellTask(UINTPTR param1,
                                         UINTPTR param2,
                                         UINTPTR param3,
@@ -407,6 +418,7 @@ LITE_OS_SEC_TEXT_MINOR UINT32 ShellTask(UINTPTR param1,
     return 0;
 }
 
+//4种任务的创建
 #define SERIAL_SHELL_TASK_NAME "SerialShellTask"
 #define SERIAL_ENTRY_TASK_NAME "SerialEntryTask"
 #define TELNET_SHELL_TASK_NAME "TelnetShellTask"

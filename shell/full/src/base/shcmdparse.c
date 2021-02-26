@@ -41,6 +41,7 @@ extern "C" {
 /*
  * Filter out double quote or single-quoted strings at both ends
  */
+ //在内核创建命令字符串副本，并过滤掉单双引号
 LITE_OS_SEC_TEXT_MINOR CHAR *OsCmdParseStrdup(const CHAR *str)
 {
     CHAR *tempStr = NULL;
@@ -63,6 +64,8 @@ LITE_OS_SEC_TEXT_MINOR CHAR *OsCmdParseStrdup(const CHAR *str)
     return tempStr;
 }
 
+
+//获取命令行词组副本，并存入*value
 LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdParseParaGet(CHAR **value, const CHAR *paraTokenStr)
 {
     if ((paraTokenStr == NULL) || (value == NULL)) {
@@ -76,6 +79,7 @@ LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdParseParaGet(CHAR **value, const CHAR *paraTo
     return LOS_OK;
 }
 
+//将指定的命令行词组存入参数列表
 LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdParseOneToken(CmdParsed *cmdParsed, UINT32 index, const CHAR *token)
 {
     UINT32 ret = LOS_OK;
@@ -102,6 +106,7 @@ LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdParseOneToken(CmdParsed *cmdParsed, UINT32 in
     return ret;
 }
 
+//将命令行字符串拆分成参数列表
 LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdTokenSplit(CHAR *cmdStr, CHAR split, CmdParsed *cmdParsed)
 {
     enum {
@@ -150,6 +155,7 @@ LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdTokenSplit(CHAR *cmdStr, CHAR split, CmdParse
     return ret;
 }
 
+//通过命令行字符串生成参数列表
 LITE_OS_SEC_TEXT_MINOR UINT32 OsCmdParse(CHAR *cmdStr, CmdParsed *cmdParsed)
 {
     if ((cmdStr == NULL) || (cmdParsed == NULL) || (strlen(cmdStr) == 0)) {
