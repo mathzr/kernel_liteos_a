@@ -39,6 +39,7 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//计算用户空间字符串长度，不超过count字节
 INT32 LOS_StrnlenUser(const CHAR *src, INT32 count)
 {
     CHAR character;
@@ -47,23 +48,25 @@ INT32 LOS_StrnlenUser(const CHAR *src, INT32 count)
     size_t offset = 0;
 
     if ((!LOS_IsUserAddress((VADDR_T)(UINTPTR)src)) || (count <= 0)) {
-        return 0;
+        return 0; //不是用户空间地址
     }
 
+	//只检查用户空间地址范围内的字符
     maxCount = (LOS_IsUserAddressRange((VADDR_T)(UINTPTR)src, (size_t)count)) ? \
                 count : (USER_ASPACE_TOP_MAX - (UINTPTR)src);
 
+	//遍历满足上述要求的地址
     for (i = 0; i < maxCount; ++i) {
         if (LOS_GetUser(&character, src + offset) != LOS_OK) {
-            return 0;
+            return 0; //从用户空间读取字符失败，则返回0
         }
-        ++offset;
+        ++offset;  //用户空间成功读取字符数增加
         if (character == '\0') {
-            return offset;
+            return offset; //遇到字符串结尾符，求出字符串长度
         }
     }
 
-    return count + 1;
+    return count + 1; //字符串过长，在规定长度没有找到结尾字符
 }
 
 #ifdef __cplusplus

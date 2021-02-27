@@ -52,6 +52,7 @@ extern "C" {
  * visit the memory out of range. Return a number larger than count if the string is too long, User should handle
  * this situation.
  */
+ //在内核上下文执行，去度量用户空间某字符串长度
 INT32 LOS_StrnlenUser(const CHAR *src, INT32 count);
 
 #ifdef __cplusplus

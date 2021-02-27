@@ -44,6 +44,7 @@
  *
  * @return bytes not copied
  */
+ //从用户空间拷贝数据到内核空间
 size_t LOS_ArchCopyFromUser(void *dst, const void *src, size_t len);
 
 /*
@@ -58,6 +59,7 @@ size_t LOS_ArchCopyFromUser(void *dst, const void *src, size_t len);
  *
  * @return bytes not copied
  */
+ //从内核空间拷贝数据到用户空间
 size_t LOS_ArchCopyToUser(void *dst, const void *src, size_t len);
 
 /*
@@ -73,6 +75,7 @@ size_t LOS_ArchCopyToUser(void *dst, const void *src, size_t len);
  *
  * @return zero on success; non-zero on failure.
  */
+ //将内核空间数据拷贝出去，可能是到用户空间，也可能是到内核空间
 INT32 LOS_CopyFromKernel(VOID *dest, UINT32 max, const VOID *src, UINT32 count);
 
 /*
@@ -88,6 +91,7 @@ INT32 LOS_CopyFromKernel(VOID *dest, UINT32 max, const VOID *src, UINT32 count);
  *
  * @return zero on success; non-zero on failure.
  */
+ //将数据拷贝到内核，数据源可能是内核也可能是进程
 INT32 LOS_CopyToKernel(VOID *dest, UINT32 max, const VOID *src, UINT32 count);
 
 /*
@@ -100,4 +104,5 @@ INT32 LOS_CopyToKernel(VOID *dest, UINT32 max, const VOID *src, UINT32 count);
  *
  * @return zero on success; non-zero on failure.
  */
+ //清空缓冲区的内容，可能是一个用户空间中的缓冲区
 INT32 LOS_UserMemClear(unsigned char *buf, UINT32 len);

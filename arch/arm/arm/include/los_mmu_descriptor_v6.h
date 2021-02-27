@@ -47,6 +47,7 @@ extern "C" {
 
 #define __iomem
 #ifndef IS_ALIGNED
+//判断地址a是否对齐在b的整数倍边界上，b是2的幂
 #define IS_ALIGNED(a, b)                                        (!(((UINTPTR)(a)) & (((UINTPTR)(b))-1)))
 #endif
 
@@ -63,39 +64,57 @@ extern "C" {
 #define MMU_DESCRIPTOR_WRITE_BACK_NO_ALLOCATE                   MMU_DESCRIPTOR_CACHE_BUFFER(3)
 
 /* user space mmu access permission define begin */
+//用户空间访问权限控制的宏定义，用于内存管理单元
 #define MMU_DESCRIPTOR_DOMAIN_MANAGER                           0
 #define MMU_DESCRIPTOR_DOMAIN_CLIENT                            1
 #define MMU_DESCRIPTOR_DOMAIN_NA                                2
 
 /* L1 descriptor type */
-#define MMU_DESCRIPTOR_L1_TYPE_INVALID                          (0x0 << 0)
-#define MMU_DESCRIPTOR_L1_TYPE_PAGE_TABLE                       (0x1 << 0)
-#define MMU_DESCRIPTOR_L1_TYPE_SECTION                          (0x2 << 0)
-#define MMU_DESCRIPTOR_L1_TYPE_MASK                             (0x3 << 0)
+//一级页表项的类型
+#define MMU_DESCRIPTOR_L1_TYPE_INVALID                          (0x0 << 0) //当前表项还未使用
+#define MMU_DESCRIPTOR_L1_TYPE_PAGE_TABLE                       (0x1 << 0) //本表项索引一个二级页表
+#define MMU_DESCRIPTOR_L1_TYPE_SECTION                          (0x2 << 0) //本表项表示一个section内存段(映射1M物理内存)
+#define MMU_DESCRIPTOR_L1_TYPE_MASK                             (0x3 << 0) //一级页表项字段的掩码
 
 /* L2 descriptor type */
-#define MMU_DESCRIPTOR_L2_TYPE_INVALID                          (0x0 << 0)
-#define MMU_DESCRIPTOR_L2_TYPE_LARGE_PAGE                       (0x1 << 0)
-#define MMU_DESCRIPTOR_L2_TYPE_SMALL_PAGE                       (0x2 << 0)
-#define MMU_DESCRIPTOR_L2_TYPE_SMALL_PAGE_XN                    (0x3 << 0)
-#define MMU_DESCRIPTOR_L2_TYPE_MASK                             (0x3 << 0)
+//二级页表项的类型
+#define MMU_DESCRIPTOR_L2_TYPE_INVALID                          (0x0 << 0) //当前表项还未使用
+#define MMU_DESCRIPTOR_L2_TYPE_LARGE_PAGE                       (0x1 << 0) //本表项索引一个大内存页，目前还不支持
+#define MMU_DESCRIPTOR_L2_TYPE_SMALL_PAGE                       (0x2 << 0) //本表项索引一个标准内存页(4K物理内存)
+#define MMU_DESCRIPTOR_L2_TYPE_SMALL_PAGE_XN                    (0x3 << 0) //本表项索引一个标准内存页(4K物理内存)， 不允许执行代码
+#define MMU_DESCRIPTOR_L2_TYPE_MASK                             (0x3 << 0) //二级页表项字段的掩码
 
+//一级页表项映射的尺寸要是1M字节的整数倍
 #define MMU_DESCRIPTOR_IS_L1_SIZE_ALIGNED(x)                    IS_ALIGNED(x, MMU_DESCRIPTOR_L1_SMALL_SIZE)
 #define MMU_DESCRIPTOR_L1_SMALL_SIZE                            0x100000
 #define MMU_DESCRIPTOR_L1_SMALL_MASK                            (MMU_DESCRIPTOR_L1_SMALL_SIZE - 1)
 #define MMU_DESCRIPTOR_L1_SMALL_FRAME                           (~MMU_DESCRIPTOR_L1_SMALL_MASK)
+//虚拟地址低20位映射为一级页表项中物理内存的低20位
 #define MMU_DESCRIPTOR_L1_SMALL_SHIFT                           20
+//一级页表项对应的虚拟页首地址
 #define MMU_DESCRIPTOR_L1_SECTION_ADDR(x)                       ((x) & MMU_DESCRIPTOR_L1_SMALL_FRAME)
+
+//二级页表项对应的虚拟页首地址
 #define MMU_DESCRIPTOR_L1_PAGE_TABLE_ADDR(x)                    ((x) & ~((1 << 10)-1))
+//每个物理页可以存放4个二级页表
 #define MMU_DESCRIPTOR_L1_SMALL_L2_TABLES_PER_PAGE              4
+//一级页表中可以存储16K表项
 #define MMU_DESCRIPTOR_L1_SMALL_ENTRY_NUMBERS                   0x4000U
+
 #define MMU_DESCRIPTOR_L1_SMALL_DOMAIN_MASK                     (~(0x0f << 5)) /* 4k page section domain mask */
 #define MMU_DESCRIPTOR_L1_SMALL_DOMAIN_CLIENT                   (MMU_DESCRIPTOR_DOMAIN_CLIENT << 5)
 
+//不具备安全属性的二级内存页
 #define MMU_DESCRIPTOR_L1_PAGETABLE_NON_SECURE                  (1 << 3)
+//不具备安全属性的一级内存页
 #define MMU_DESCRIPTOR_L1_SECTION_NON_SECURE                    (1 << 19)
+//一级内存页用于在多个CPU之间共享的情况
 #define MMU_DESCRIPTOR_L1_SECTION_SHAREABLE                     (1 << 16)
+
+//只用于用户进程的一级内存页
 #define MMU_DESCRIPTOR_L1_SECTION_NON_GLOBAL                    (1 << 17)
+
+//不允许执行代码的一级内存页
 #define MMU_DESCRIPTOR_L1_SECTION_XN                            (1 << 4)
 
 /* TEX CB */

@@ -141,6 +141,7 @@ extern VOID Wfe(VOID);
  * los_hw.h: the header file that contains the API declaration.
  * @see None.
  */
+ //CPU暂停执行，并等待中断信号
 extern VOID Wfi(VOID);
 
 /**
@@ -161,6 +162,7 @@ extern VOID Wfi(VOID);
  * los_hw.h: the header file that contains the API declaration.
  * @see None.
  */
+ //数据访问内存屏障，屏障前后的内存读写动作不允许互相交换
 extern VOID Dmb(VOID);
 
 /**
@@ -181,6 +183,7 @@ extern VOID Dmb(VOID);
  * los_hw.h: the header file that contains the API declaration.
  * @see None.
  */
+ //某种类型的内存屏障
 extern VOID Dsb(VOID);
 
 /**
@@ -203,6 +206,7 @@ extern VOID Dsb(VOID);
  * los_hw.h: the header file that contains the API declaration.
  * @see None.
  */
+ //清空指令流水线，即等待指令流水线中的指令执行完
 extern VOID Isb(VOID);
 
 /**
@@ -223,6 +227,7 @@ extern VOID Isb(VOID);
  * los_hw.h: the header file that contains the API declaration.
  * @see None.
  */
+ //放弃当前指令缓存中的内容
 extern VOID FlushICache(VOID);
 
 /**
@@ -247,6 +252,7 @@ extern VOID FlushICache(VOID);
  * los_hw.h: the header file that contains the API declaration.
  * @see None.
  */
+ //将数据缓存的内容同步到内存
 extern VOID DCacheFlushRange(UINTPTR start, UINTPTR end);
 
 /**
@@ -271,6 +277,7 @@ extern VOID DCacheFlushRange(UINTPTR start, UINTPTR end);
  * los_hw.h: the header file that contains the API declaration.
  * @see None.
  */
+ //废弃数据缓存中的内容
 extern VOID DCacheInvRange(UINTPTR start, UINTPTR end);
 
 /**
@@ -293,6 +300,7 @@ extern VOID DCacheInvRange(UINTPTR start, UINTPTR end);
  * los_hw.h: the header file that contains the API declaration.
  * @see None.
  */
+ //获取当前CPU核对应的名称
 STATIC INLINE const CHAR *LOS_CpuInfo(VOID)
 {
     INT32 i;

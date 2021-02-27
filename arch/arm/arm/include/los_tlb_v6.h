@@ -46,6 +46,7 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//清空硬件TLB缓存
 STATIC INLINE VOID OsArmInvalidateTlbBarrier(VOID)
 {
 #ifdef LOSCFG_KERNEL_SMP
@@ -57,6 +58,7 @@ STATIC INLINE VOID OsArmInvalidateTlbBarrier(VOID)
     ISB;
 }
 
+//清除硬件TLB指定地址相关的缓存
 STATIC INLINE VOID OsArmInvalidateTlbMvaNoBarrier(VADDR_T va)
 {
 #ifdef LOSCFG_KERNEL_SMP
@@ -66,6 +68,7 @@ STATIC INLINE VOID OsArmInvalidateTlbMvaNoBarrier(VADDR_T va)
 #endif
 }
 
+//清除某地址范围对应的TLB缓存
 STATIC INLINE VOID OsArmInvalidateTlbMvaRangeNoBarrier(VADDR_T start, UINT32 count)
 {
     UINT32 index = 0;
@@ -77,6 +80,7 @@ STATIC INLINE VOID OsArmInvalidateTlbMvaRangeNoBarrier(VADDR_T start, UINT32 cou
     }
 }
 
+//清除TLB缓存
 STATIC INLINE VOID OsCleanTLB(VOID)
 {
     UINT32 val = 0;

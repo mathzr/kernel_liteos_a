@@ -34,6 +34,7 @@
 .syntax unified
 .arm
 
+//将数据拷贝到用户空间去
 // errno_t _arm_put_user(void *dst, const void *src, size_t dstTypeLen, size_t srcTypeLen)
 FUNCTION(_arm_put_user)
 //各寄存器压栈

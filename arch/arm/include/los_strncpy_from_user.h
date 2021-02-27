@@ -53,6 +53,7 @@ extern "C" {
  * @return Return -EFAULT if src is not in user space or count <= 0 or copy out of range. Return the length of
  * the string if success, if count is smaller than the length of the string then copy count bytes and return count.
  */
+ //从用户空间拷贝字符串到内核空间，在内核上下文执行
 INT32 LOS_StrncpyFromUser(CHAR *dst, const CHAR *src, INT32 count);
 
 #ifdef __cplusplus

@@ -28,7 +28,7 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
+//要理解本文件中的代码写法，需要参考阅读arm的芯片手册，后续补充
 
 #ifndef __LOS_ARM_H__
 #define __LOS_ARM_H__

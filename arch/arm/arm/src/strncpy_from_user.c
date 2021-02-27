@@ -39,6 +39,7 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//从用户空间最多拷贝count长度的字符串过来(到内核)
 INT32 LOS_StrncpyFromUser(CHAR *dst, const CHAR *src, INT32 count)
 {
     CHAR character;
@@ -47,24 +48,26 @@ INT32 LOS_StrncpyFromUser(CHAR *dst, const CHAR *src, INT32 count)
     size_t offset = 0;
 
     if ((!LOS_IsKernelAddress((VADDR_T)(UINTPTR)dst)) || (!LOS_IsUserAddress((VADDR_T)(UINTPTR)src)) || (count <= 0)) {
-        return -EFAULT;
+        return -EFAULT; //必须是从用户空间到内核空间
     }
 
+	//只拷贝用户地址空间相关的字符串
     maxCount = (LOS_IsUserAddressRange((VADDR_T)(UINTPTR)src, (size_t)count)) ? \
                 count : (USER_ASPACE_TOP_MAX - (UINTPTR)src);
 
+	//遍历用户空间字符串
     for (i = 0; i < maxCount; ++i) {
         if (LOS_GetUser(&character, src + offset) != LOS_OK) {
-            return -EFAULT;
+            return -EFAULT; //从用户空间读取字符到内核空间
         }
-        *(CHAR *)(dst + offset) = character;
+        *(CHAR *)(dst + offset) = character; //拷贝字符
         if (character == '\0') {
-            return offset;
+            return offset; //拷贝结束，返回字符串长度
         }
         ++offset;
     }
 
-    return offset;
+    return offset;  //返回字符串长度
 }
 
 #ifdef __cplusplus

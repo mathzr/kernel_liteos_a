@@ -34,6 +34,7 @@
 .syntax unified
 .arm
 
+//将用户空间数据拷贝到内核空间，支持1,2,4字节
 // errno_t _arm_get_user(void *dst, const void *src, size_t dstTypeLen, size_t srcTypeLen)
 //dst内核空间地址，src, 用户空间地址
 FUNCTION(_arm_get_user)

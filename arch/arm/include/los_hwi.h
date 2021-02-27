@@ -50,12 +50,13 @@ extern "C" {
  * @ingroup los_hwi
  * Count of interrupts.
  */
-extern size_t g_intCount[];
+extern size_t g_intCount[]; //每个CPU的中断数目
 
 /**
  * @ingroup los_hwi
  * An interrupt is active.
  */
+ //如果当前CPU的中断数目不为0，说明当前CPU在中断上下文
 #define OS_INT_ACTIVE ({                    \
     size_t intCount;                        \
     UINT32 intSave_ = LOS_IntLock();        \
@@ -68,24 +69,28 @@ extern size_t g_intCount[];
  * @ingroup los_hwi
  * An interrupt is inactive.
  */
+ //不在中断上下文
 #define OS_INT_INACTIVE (!(OS_INT_ACTIVE))
 
 /**
  * @ingroup los_hwi
  * Highest priority of a hardware interrupt.
  */
+ //硬件中断最高优先级
 #define OS_HWI_PRIO_HIGHEST 0
 
 /**
  * @ingroup los_hwi
  * Lowest priority of a hardware interrupt.
  */
+ //硬件中断最低优先级
 #define OS_HWI_PRIO_LOWEST 31
 
 /**
  * @ingroup los_hwi
  * Max name length of a hardware interrupt.
  */
+ //中断的最长名称
 #define OS_HWI_MAX_NAMELEN 10
 
 /**
@@ -96,6 +101,7 @@ extern size_t g_intCount[];
  *
  * Solution: Ensure that the interrupt number is valid.
  */
+ //非法的中断号
 #define OS_ERRNO_HWI_NUM_INVALID                LOS_ERRNO_OS_ERROR(LOS_MOD_HWI, 0x00)
 
 /**
@@ -106,6 +112,7 @@ extern size_t g_intCount[];
  *
  * Solution: Pass in a valid non-null hardware interrupt handling function.
  */
+ //非法的中断处理函数
 #define OS_ERRNO_HWI_PROC_FUNC_NULL             LOS_ERRNO_OS_ERROR(LOS_MOD_HWI, 0x01)
 
 /**
@@ -116,6 +123,7 @@ extern size_t g_intCount[];
  *
  * Solution: Increase the configured maximum number of supported hardware interrupts.
  */
+ //硬件中断资源耗尽
 #define OS_ERRNO_HWI_CB_UNAVAILABLE             LOS_ERRNO_OS_ERROR(LOS_MOD_HWI, 0x02)
 
 /**
@@ -126,6 +134,7 @@ extern size_t g_intCount[];
  *
  * Solution: Expand the configured memory.
  */
+ //内存不足
 #define OS_ERRNO_HWI_NO_MEMORY                  LOS_ERRNO_OS_ERROR(LOS_MOD_HWI, 0x03)
 
 /**
@@ -136,6 +145,7 @@ extern size_t g_intCount[];
  *
  * Solution: Check whether the interrupt specified by the passed-in interrupt number has already been created.
  */
+ //硬件中断已存在
 #define OS_ERRNO_HWI_ALREADY_CREATED            LOS_ERRNO_OS_ERROR(LOS_MOD_HWI, 0x04)
 
 /**
@@ -146,6 +156,7 @@ extern size_t g_intCount[];
  *
  * Solution: Ensure that the interrupt priority is valid.
  */
+ //非法的硬件中断优先级
 #define OS_ERRNO_HWI_PRIO_INVALID               LOS_ERRNO_OS_ERROR(LOS_MOD_HWI, 0x05)
 
 /**
@@ -157,6 +168,7 @@ extern size_t g_intCount[];
  * Solution: The interrupt creation mode can be only set to OS_HWI_MODE_COMM or OS_HWI_MODE_FAST of
  * which the value can be 0 or 1.
  */
+ //只支持普通中断和快速中断，不支持其它
 #define OS_ERRNO_HWI_MODE_INVALID               LOS_ERRNO_OS_ERROR(LOS_MOD_HWI, 0x06)
 
 /**
@@ -167,6 +179,7 @@ extern size_t g_intCount[];
  *
  * Solution: Check whether the interrupt specified by the passed-in interrupt number has already been created.
  */
+ //中断已经被创建成快速中断
 #define OS_ERRNO_HWI_FASTMODE_ALREADY_CREATED LOS_ERRNO_OS_ERROR(LOS_MOD_HWI, 0x07)
 
 /**
@@ -177,6 +190,7 @@ extern size_t g_intCount[];
  *
  * * Solution: Do not call the API during an interrupt.
  */
+ //不允许在中断上下文调用
 #define OS_ERRNO_HWI_INTERR                     LOS_ERRNO_OS_ERROR(LOS_MOD_HWI, 0x08)
 
 /**
@@ -208,25 +222,26 @@ extern size_t g_intCount[];
  *
  * * Solution: Check the hwi number or devid, make sure the hwi number or devid need to delete.
  */
+ //设备ID或者中断号不存在
 #define OS_ERRNO_HWI_HWINUM_UNCREATE            LOS_ERRNO_OS_ERROR(LOS_MOD_HWI, 0x0b)
 
 /**
  * @ingroup los_hwi
  * Define the type of a hardware interrupt number.
  */
-typedef UINT32 HWI_HANDLE_T;
+typedef UINT32 HWI_HANDLE_T; //中断号
 
 /**
  * @ingroup los_hwi
  * Define the type of a hardware interrupt priority.
  */
-typedef UINT16 HWI_PRIOR_T;
+typedef UINT16 HWI_PRIOR_T; //中断优先级
 
 /**
  * @ingroup los_hwi
  * Define the type of hardware interrupt mode configurations.
  */
-typedef UINT16 HWI_MODE_T;
+typedef UINT16 HWI_MODE_T; //中断模式
 
 /**
  * @ingroup los_hwi
@@ -239,7 +254,7 @@ typedef UINTPTR HWI_ARG_T;
  * @ingroup  los_hwi
  * Define the type of a hardware interrupt handling function.
  */
-typedef VOID (*HWI_PROC_FUNC)(VOID);
+typedef VOID (*HWI_PROC_FUNC)(VOID); //中断处理函数的原型
 
 /*
  * These flags used only by the kernel as part of the
@@ -247,20 +262,22 @@ typedef VOID (*HWI_PROC_FUNC)(VOID);
  *
  * IRQF_SHARED - allow sharing the irq among several devices
  */
-#define IRQF_SHARED 0x8000U
+#define IRQF_SHARED 0x8000U  //多个设备共享一个中断号
 
+//中断向量表中的一项
 typedef struct tagHwiHandleForm {
-    HWI_PROC_FUNC pfnHook;
-    HWI_ARG_T uwParam;
-    struct tagHwiHandleForm *pstNext;
-} HwiHandleForm;
+    HWI_PROC_FUNC pfnHook;  //中断处理函数
+    HWI_ARG_T uwParam;      //创建参数
+    struct tagHwiHandleForm *pstNext;  //链式结构
+} HwiHandleForm; //中断向量表
 
-typedef struct tagIrqParam {
-    int swIrq;
-    VOID *pDevId;
-    const CHAR *pName;
+typedef struct tagIrqParam {  //中断参数
+    int swIrq;    //中断号
+    VOID *pDevId;  //设备号
+    const CHAR *pName; //中断名称
 } HwiIrqParam;
 
+//中断向量表
 extern HwiHandleForm g_hwiForm[OS_HWI_MAX_NUM];
 
 /**
@@ -283,6 +300,7 @@ extern HwiHandleForm g_hwiForm[OS_HWI_MAX_NUM];
  * <ul><li>los_hwi.h: the header file that contains the API declaration.</li></ul>
  * @see LOS_IntRestore
  */
+ //关中断
 STATIC INLINE UINT32 LOS_IntLock(VOID)
 {
     return ArchIntLock();
@@ -308,6 +326,7 @@ STATIC INLINE UINT32 LOS_IntLock(VOID)
  * <ul><li>los_hwi.h: the header file that contains the API declaration.</li></ul>
  * @see LOS_IntLock
  */
+ //开中断
 STATIC INLINE UINT32 LOS_IntUnLock(VOID)
 {
     return ArchIntUnlock();
@@ -334,6 +353,7 @@ STATIC INLINE UINT32 LOS_IntUnLock(VOID)
  * <ul><li>los_hwi.h: the header file that contains the API declaration.</li></ul>
  * @see LOS_IntLock
  */
+ //恢复关中断之前的状态
 STATIC INLINE VOID LOS_IntRestore(UINT32 intSave)
 {
     ArchIntRestore(intSave);
@@ -376,6 +396,8 @@ STATIC INLINE VOID LOS_IntRestore(UINT32 intSave)
  * <ul><li>los_hwi.h: the header file that contains the API declaration.</li></ul>
  * @see None.
  */
+ //创建中断
+ //指定中断号，中断优先级，中断模式，处理函数以及对应的参数
 extern UINT32 LOS_HwiCreate(HWI_HANDLE_T hwiNum,
                             HWI_PRIOR_T hwiPrio,
                             HWI_MODE_T hwiMode,
@@ -411,6 +433,7 @@ extern UINT32 LOS_HwiCreate(HWI_HANDLE_T hwiNum,
  * <ul><li>los_hwi.h: the header file that contains the API declaration.</li></ul>
  * @see None.
  */
+ //删除中断
 extern UINT32 LOS_HwiDelete(HWI_HANDLE_T hwiNum, HwiIrqParam *irqParam);
 
 #ifdef __cplusplus

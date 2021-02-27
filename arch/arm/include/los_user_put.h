@@ -54,6 +54,7 @@ extern "C" {
  *
  * @return Return -EFAULT if error. Return 0 if success.
  */
+ //将内核空间中的数据写入用户空间(这里只支持基本类型，char/short/int/long等)
 #define LOS_PutUser(src, dst) _arm_put_user((dst), (src), sizeof(*(dst)), sizeof(*(src)))
 
 #ifdef __cplusplus

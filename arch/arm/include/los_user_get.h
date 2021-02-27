@@ -54,6 +54,7 @@ extern "C" {
  *
  * @return Return -EFAULT if error. Return 0 if success.
  */
+ //在内核空间去读取用户空间的数据(基本类型数据,char/short/int/long)
 #define LOS_GetUser(dst, src) _arm_get_user((dst), (src), sizeof(*(dst)), sizeof(*(src)))
 
 #ifdef __cplusplus

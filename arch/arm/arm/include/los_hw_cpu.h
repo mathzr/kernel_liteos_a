@@ -53,6 +53,7 @@ extern "C" {
 #define ISB     __asm__ volatile("isb" ::: "memory")
 #define BARRIER __asm__ volatile("":::"memory")
 
+//读取系统寄存器的值
 #define ARM_SYSREG_READ(REG)                    \
 ({                                              \
     UINT32 _val;                                \
@@ -60,6 +61,7 @@ extern "C" {
     _val;                                       \
 })
 
+//向寄存器写入值
 #define ARM_SYSREG_WRITE(REG, val)              \
 ({                                              \
     __asm__ volatile("mcr " REG :: "r" (val));  \
@@ -79,6 +81,7 @@ extern "C" {
     ISB;                                         \
 })
 
+//协处理器的寄存器读写
 #define CP14_REG(CRn, Op1, CRm, Op2)    "p14, "#Op1", %0, "#CRn","#CRm","#Op2
 #define CP15_REG(CRn, Op1, CRm, Op2)    "p15, "#Op1", %0, "#CRn","#CRm","#Op2
 #define CP15_REG64(CRn, Op1)            "p15, "#Op1", %0,    %H0,"#CRn
@@ -127,21 +130,25 @@ extern "C" {
 
 #define MPIDR_CPUID_MASK    (0xffU)
 
+//通过寄存器读取当前线程标识
 STATIC INLINE VOID *ArchCurrTaskGet(VOID)
 {
     return (VOID *)(UINTPTR)ARM_SYSREG_READ(TPIDRPRW);
 }
 
+//将线程标识设置到寄存器中
 STATIC INLINE VOID ArchCurrTaskSet(VOID *val)
 {
     ARM_SYSREG_WRITE(TPIDRPRW, (UINT32)(UINTPTR)val);
 }
 
+//设置用户态只读的线程ID到寄存器中
 STATIC INLINE VOID ArchCurrUserTaskSet(UINTPTR val)
 {
     ARM_SYSREG_WRITE(TPIDRURO, (UINT32)val);
 }
 
+//获取当前CPU编号
 STATIC INLINE UINT32 ArchCurrCpuid(VOID)
 {
 #if (LOSCFG_KERNEL_SMP == YES)
@@ -151,11 +158,13 @@ STATIC INLINE UINT32 ArchCurrCpuid(VOID)
 #endif
 }
 
+//获取硬件ID，内部含CPU ID编号
 STATIC INLINE UINT64 OsHwIDGet(VOID)
 {
     return ARM_SYSREG_READ(MPIDR);
 }
 
+//获取硬件ID，内部含CPU ID编号
 STATIC INLINE UINT32 OsMainIDGet(VOID)
 {
     return ARM_SYSREG_READ(MIDR);
@@ -163,7 +172,7 @@ STATIC INLINE UINT32 OsMainIDGet(VOID)
 
 /* CPU interrupt mask handle implementation */
 #if LOSCFG_ARM_ARCH >= 6
-
+//屏蔽中断信号--关中断
 STATIC INLINE UINT32 ArchIntLock(VOID)
 {
     UINT32 intSave;
@@ -176,6 +185,7 @@ STATIC INLINE UINT32 ArchIntLock(VOID)
     return intSave;
 }
 
+//取消中断信号屏蔽--开中断
 STATIC INLINE UINT32 ArchIntUnlock(VOID)
 {
     UINT32 intSave;
@@ -216,6 +226,7 @@ STATIC INLINE UINT32 ArchIntUnlock(VOID)
 
 #endif
 
+//恢复中断信号屏蔽前状态
 STATIC INLINE VOID ArchIntRestore(UINT32 intSave)
 {
     __asm__ __volatile__(
@@ -227,6 +238,7 @@ STATIC INLINE VOID ArchIntRestore(UINT32 intSave)
 
 #define PSR_I_BIT   0x00000080U
 
+//当前中断信号被屏蔽状态
 STATIC INLINE UINT32 OsIntLocked(VOID)
 {
     UINT32 intSave;
@@ -240,6 +252,8 @@ STATIC INLINE UINT32 OsIntLocked(VOID)
     return intSave & PSR_I_BIT;
 }
 
+
+//获取栈寄存器的值
 STATIC INLINE UINT32 ArchSPGet(VOID)
 {
     UINT32 val;

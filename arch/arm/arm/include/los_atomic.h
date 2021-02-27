@@ -45,8 +45,8 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
-typedef volatile INT32 Atomic;
-typedef volatile INT64 Atomic64;
+typedef volatile INT32 Atomic; //32位原子类型
+typedef volatile INT64 Atomic64; //64位原子类型
 
 /**
  * @ingroup  los_atomic
@@ -66,6 +66,7 @@ typedef volatile INT64 Atomic64;
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子读操作
 STATIC INLINE INT32 LOS_AtomicRead(const Atomic *v)
 {
     return *(volatile INT32 *)v;
@@ -90,6 +91,7 @@ STATIC INLINE INT32 LOS_AtomicRead(const Atomic *v)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子写操作
 STATIC INLINE VOID LOS_AtomicSet(Atomic *v, INT32 setVal)
 {
     *(volatile INT32 *)v = setVal;
@@ -116,6 +118,7 @@ STATIC INLINE VOID LOS_AtomicSet(Atomic *v, INT32 setVal)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子加操作
 STATIC INLINE INT32 LOS_AtomicAdd(Atomic *v, INT32 addVal)
 {
     INT32 val;
@@ -154,6 +157,7 @@ STATIC INLINE INT32 LOS_AtomicAdd(Atomic *v, INT32 addVal)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子减操作
 STATIC INLINE INT32 LOS_AtomicSub(Atomic *v, INT32 subVal)
 {
     INT32 val;
@@ -190,6 +194,7 @@ STATIC INLINE INT32 LOS_AtomicSub(Atomic *v, INT32 subVal)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子加1操作
 STATIC INLINE VOID LOS_AtomicInc(Atomic *v)
 {
     INT32 val;
@@ -224,6 +229,7 @@ STATIC INLINE VOID LOS_AtomicInc(Atomic *v)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子加1并返回新值操作
 STATIC INLINE INT32 LOS_AtomicIncRet(Atomic *v)
 {
     INT32 val;
@@ -260,6 +266,7 @@ STATIC INLINE INT32 LOS_AtomicIncRet(Atomic *v)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子减1操作
 STATIC INLINE VOID LOS_AtomicDec(Atomic *v)
 {
     INT32 val;
@@ -294,6 +301,7 @@ STATIC INLINE VOID LOS_AtomicDec(Atomic *v)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子减1并返回新值操作
 STATIC INLINE INT32 LOS_AtomicDecRet(Atomic *v)
 {
     INT32 val;
@@ -329,6 +337,7 @@ STATIC INLINE INT32 LOS_AtomicDecRet(Atomic *v)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子64位读操作
 STATIC INLINE INT64 LOS_Atomic64Read(const Atomic64 *v)
 {
     INT64 val;
@@ -362,6 +371,7 @@ STATIC INLINE INT64 LOS_Atomic64Read(const Atomic64 *v)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子64位写操作
 STATIC INLINE VOID LOS_Atomic64Set(Atomic64 *v, INT64 setVal)
 {
     INT64 tmp;
@@ -397,6 +407,7 @@ STATIC INLINE VOID LOS_Atomic64Set(Atomic64 *v, INT64 setVal)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子64位加操作
 STATIC INLINE INT64 LOS_Atomic64Add(Atomic64 *v, INT64 addVal)
 {
     INT64 val;
@@ -436,6 +447,7 @@ STATIC INLINE INT64 LOS_Atomic64Add(Atomic64 *v, INT64 addVal)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子64位减操作
 STATIC INLINE INT64 LOS_Atomic64Sub(Atomic64 *v, INT64 subVal)
 {
     INT64 val;
@@ -473,6 +485,7 @@ STATIC INLINE INT64 LOS_Atomic64Sub(Atomic64 *v, INT64 subVal)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子64位加1操作
 STATIC INLINE VOID LOS_Atomic64Inc(Atomic64 *v)
 {
     INT64 val;
@@ -508,6 +521,7 @@ STATIC INLINE VOID LOS_Atomic64Inc(Atomic64 *v)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子64位加1并返回新值操作
 STATIC INLINE INT64 LOS_Atomic64IncRet(Atomic64 *v)
 {
     INT64 val;
@@ -545,6 +559,7 @@ STATIC INLINE INT64 LOS_Atomic64IncRet(Atomic64 *v)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子64位减1操作
 STATIC INLINE VOID LOS_Atomic64Dec(Atomic64 *v)
 {
     INT64 val;
@@ -580,6 +595,7 @@ STATIC INLINE VOID LOS_Atomic64Dec(Atomic64 *v)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //原子64位减1并返回新值操作
 STATIC INLINE INT64 LOS_Atomic64DecRet(Atomic64 *v)
 {
     INT64 val;
@@ -616,6 +632,7 @@ STATIC INLINE INT64 LOS_Atomic64DecRet(Atomic64 *v)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //设置新值并返回旧值-1个字节
 STATIC INLINE INT32 LOS_AtomicXchgByte(volatile INT8 *v, INT32 val)
 {
     INT32 prevVal;
@@ -650,6 +667,7 @@ STATIC INLINE INT32 LOS_AtomicXchgByte(volatile INT8 *v, INT32 val)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //设置新值并返回旧值-2个字节
 STATIC INLINE INT32 LOS_AtomicXchg16bits(volatile INT16 *v, INT32 val)
 {
     INT32 prevVal;
@@ -684,6 +702,7 @@ STATIC INLINE INT32 LOS_AtomicXchg16bits(volatile INT16 *v, INT32 val)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //设置新值并返回旧值-4个字节
 STATIC INLINE INT32 LOS_AtomicXchg32bits(Atomic *v, INT32 val)
 {
     INT32 prevVal;
@@ -718,6 +737,7 @@ STATIC INLINE INT32 LOS_AtomicXchg32bits(Atomic *v, INT32 val)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //设置新值并返回旧值-8个字节
 STATIC INLINE INT64 LOS_AtomicXchg64bits(Atomic64 *v, INT64 val)
 {
     INT64 prevVal;
@@ -753,6 +773,7 @@ STATIC INLINE INT64 LOS_AtomicXchg64bits(Atomic64 *v, INT64 val)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+ //比较旧值并设置新值-1字节
 STATIC INLINE BOOL LOS_AtomicCmpXchgByte(volatile INT8 *v, INT32 val, INT32 oldVal)
 {
     INT32 prevVal;
@@ -790,6 +811,7 @@ STATIC INLINE BOOL LOS_AtomicCmpXchgByte(volatile INT8 *v, INT32 val, INT32 oldV
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+  //比较旧值并设置新值-2字节
 STATIC INLINE BOOL LOS_AtomicCmpXchg16bits(volatile INT16 *v, INT32 val, INT32 oldVal)
 {
     INT32 prevVal;
@@ -827,6 +849,7 @@ STATIC INLINE BOOL LOS_AtomicCmpXchg16bits(volatile INT16 *v, INT32 val, INT32 o
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+  //比较旧值并设置新值-4字节
 STATIC INLINE BOOL LOS_AtomicCmpXchg32bits(Atomic *v, INT32 val, INT32 oldVal)
 {
     INT32 prevVal;
@@ -864,6 +887,7 @@ STATIC INLINE BOOL LOS_AtomicCmpXchg32bits(Atomic *v, INT32 val, INT32 oldVal)
  * <ul><li>los_atomic.h: the header file that contains the API declaration.</li></ul>
  * @see
  */
+  //比较旧值并设置新值-8字节
 STATIC INLINE BOOL LOS_AtomicCmpXchg64bits(Atomic64 *v, INT64 val, INT64 oldVal)
 {
     INT64 prevVal;

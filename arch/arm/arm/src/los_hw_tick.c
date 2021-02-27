@@ -38,6 +38,7 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//系统时钟初始化
 LITE_OS_SEC_TEXT_INIT UINT32 OsTickInit(UINT32 systemClock, UINT32 tickPerSecond)
 {
     if ((systemClock == 0) ||
@@ -50,11 +51,13 @@ LITE_OS_SEC_TEXT_INIT UINT32 OsTickInit(UINT32 systemClock, UINT32 tickPerSecond
     return LOS_OK;
 }
 
+//系统时钟启动
 LITE_OS_SEC_TEXT_INIT VOID OsTickStart(VOID)
 {
     HalClockStart();
 }
 
+//获取CPU主频
 LITE_OS_SEC_TEXT_MINOR VOID LOS_GetCpuCycle(UINT32 *highCnt, UINT32 *lowCnt)
 {
     UINT64 cycle = HalClockGetCycles();
@@ -63,6 +66,7 @@ LITE_OS_SEC_TEXT_MINOR VOID LOS_GetCpuCycle(UINT32 *highCnt, UINT32 *lowCnt)
     *lowCnt = cycle & 0xFFFFFFFFU;
 }
 
+//启机以来的纳秒数
 LITE_OS_SEC_TEXT_MINOR UINT64 LOS_CurrNanosec(VOID)
 {
     DOUBLE nanos;
@@ -71,11 +75,13 @@ LITE_OS_SEC_TEXT_MINOR UINT64 LOS_CurrNanosec(VOID)
     return (UINT64)nanos;
 }
 
+//微秒单位的延时
 LITE_OS_SEC_TEXT_MINOR VOID LOS_Udelay(UINT32 usecs)
 {
     HalDelayUs(usecs);
 }
 
+//毫秒单位的延时
 LITE_OS_SEC_TEXT_MINOR VOID LOS_Mdelay(UINT32 msecs)
 {
     HalDelayUs(msecs * 1000); /* 1000 : 1ms = 1000us */

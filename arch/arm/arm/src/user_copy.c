@@ -49,7 +49,7 @@ size_t arch_copy_from_user(void *dst, const void *src, size_t len)
 size_t LOS_ArchCopyFromUser(void *dst, const void *src, size_t len)
 {
     if (!LOS_IsUserAddressRange((VADDR_T)(UINTPTR)src, len)) {
-        return len;
+        return len; 
     }
 
     return _arm_user_copy(dst, src, len);
@@ -69,47 +69,53 @@ size_t LOS_ArchCopyToUser(void *dst, const void *src, size_t len)
     return _arm_user_copy(dst, src, len);
 }
 
+//从内核拷贝数据到目标
 INT32 LOS_CopyFromKernel(VOID *dest, UINT32 max, const VOID *src, UINT32 count)
 {
     INT32 ret;
 
     if (!LOS_IsUserAddressRange((VADDR_T)(UINTPTR)dest, count)) {
-        ret = memcpy_s(dest, max, src, count);
+        ret = memcpy_s(dest, max, src, count); //内核到内核
     } else {
+    	//内核到用户空间
         ret = ((max >= count) ? _arm_user_copy(dest, src, count) : ERANGE_AND_RESET);
     }
 
     return ret;
 }
 
+
+//拷贝到内核
 INT32 LOS_CopyToKernel(VOID *dest, UINT32 max, const VOID *src, UINT32 count)
 {
     INT32 ret;
 
     if (!LOS_IsUserAddressRange((vaddr_t)(UINTPTR)src, count)) {
-        ret = memcpy_s(dest, max, src, count);
+        ret = memcpy_s(dest, max, src, count); //内核到内核
     } else {
+    	//用户空间到内核
         ret = ((max >= count) ? _arm_user_copy(dest, src, count) : ERANGE_AND_RESET);
     }
 
     return ret;
 }
 
+//清空一段数据
 INT32 LOS_UserMemClear(unsigned char *buf, UINT32 len)
 {
     INT32 ret = 0;
     if (!LOS_IsUserAddressRange((vaddr_t)(UINTPTR)buf, len)) {
-        (VOID)memset_s(buf, len, 0, len);
+        (VOID)memset_s(buf, len, 0, len); //内核空间数据清空
     } else {
         unsigned char *tmp = (unsigned char *)LOS_MemAlloc(OS_SYS_MEM_ADDR, len);
         if (tmp == NULL) {
             return -ENOMEM;
         }
-        (VOID)memset_s(tmp, len, 0, len);
+        (VOID)memset_s(tmp, len, 0, len); //先在内核空间设置一段0值内存
         if (_arm_user_copy(buf, tmp, len) != 0) {
-            ret = -EFAULT;
+            ret = -EFAULT; //覆盖用户空间内容
         }
-        LOS_MemFree(OS_SYS_MEM_ADDR, tmp);
+        LOS_MemFree(OS_SYS_MEM_ADDR, tmp); //释放内核空间0值内存
     }
     return ret;
 }

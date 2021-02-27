@@ -47,6 +47,7 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//更新一级页表项
 STATIC INLINE VOID OsSavePte1(PTE_T *pte1Ptr, PTE_T pte1)
 {
     DMB;
@@ -54,61 +55,73 @@ STATIC INLINE VOID OsSavePte1(PTE_T *pte1Ptr, PTE_T pte1)
     DSB;
 }
 
+//虚拟地址调整成一级页表项对应的虚拟地址，保留高12位
 STATIC INLINE ADDR_T OsTruncPte1(ADDR_T addr)
 {
     return MMU_DESCRIPTOR_L1_SECTION_ADDR(addr);
 }
 
+//获取虚拟地址对应的一级页表项编号
 STATIC INLINE UINT32 OsGetPte1Index(vaddr_t va)
 {
     return va >> MMU_DESCRIPTOR_L1_SMALL_SHIFT;
 }
 
+//清除指定的一级页表项
 STATIC INLINE VOID OsClearPte1(PTE_T *pte1Ptr)
 {
     OsSavePte1(pte1Ptr, 0);
 }
 
+//根据虚拟地址获取一级页表项的地址
 STATIC INLINE PTE_T *OsGetPte1Ptr(PTE_T *pte1BasePtr, vaddr_t va)
 {
     return (pte1BasePtr + OsGetPte1Index(va));
 }
 
+//获取一级页表项的值
 STATIC INLINE PTE_T OsGetPte1(PTE_T *pte1BasePtr, vaddr_t va)
 {
     return *OsGetPte1Ptr(pte1BasePtr, va);
 }
 
+//一级页表项关联一个二级页表？
 STATIC INLINE BOOL OsIsPte1PageTable(PTE_T pte1)
 {
     return (pte1 & MMU_DESCRIPTOR_L1_TYPE_MASK) == MMU_DESCRIPTOR_L1_TYPE_PAGE_TABLE;
 }
 
+//一级页表项还未使用
 STATIC INLINE BOOL OsIsPte1Invalid(PTE_T pte1)
 {
     return (pte1 & MMU_DESCRIPTOR_L1_TYPE_MASK) == MMU_DESCRIPTOR_L1_TYPE_INVALID;
 }
 
+//一级页表项关联连续的1M字节内存段
 STATIC INLINE BOOL OsIsPte1Section(PTE_T pte1)
 {
     return (pte1 & MMU_DESCRIPTOR_L1_TYPE_MASK) == MMU_DESCRIPTOR_L1_TYPE_SECTION;
 }
 
+//二级页表项的编号
 STATIC INLINE UINT32 OsGetPte2Index(vaddr_t va)
 {
     return (va % MMU_DESCRIPTOR_L1_SMALL_SIZE) >> MMU_DESCRIPTOR_L2_SMALL_SHIFT;
 }
 
+//获取二级页表项的地址
 STATIC INLINE PTE_T *OsGetPte2Ptr(PTE_T *pte2BasePtr, vaddr_t va)
 {
     return (pte2BasePtr + OsGetPte2Index(va));
 }
 
+//获取二级页表项的值
 STATIC INLINE PTE_T OsGetPte2(PTE_T *pte2BasePtr, vaddr_t va)
 {
     return *(pte2BasePtr + OsGetPte2Index(va));
 }
 
+//保存二级页表项
 STATIC INLINE VOID OsSavePte2(PTE_T *pte2Ptr, PTE_T pte2)
 {
     DMB;
@@ -116,6 +129,7 @@ STATIC INLINE VOID OsSavePte2(PTE_T *pte2Ptr, PTE_T pte2)
     DSB;
 }
 
+//连续保存多个2级页表项
 STATIC INLINE UINT32 OsSavePte2Continuous(PTE_T *pte2BasePtr, UINT32 index, PTE_T pte2, UINT32 count)
 {
     UINT32 saveCounts = 0;
@@ -135,6 +149,7 @@ STATIC INLINE UINT32 OsSavePte2Continuous(PTE_T *pte2BasePtr, UINT32 index, PTE_
     return saveCounts;
 }
 
+//连续清空多项二级页表项
 STATIC INLINE VOID OsClearPte2Continuous(PTE_T *pte2Ptr, UINT32 count)
 {
     UINT32 index = 0;
@@ -147,21 +162,25 @@ STATIC INLINE VOID OsClearPte2Continuous(PTE_T *pte2Ptr, UINT32 count)
     DSB;
 }
 
+//二级页表项类型， small 
 STATIC INLINE BOOL OsIsPte2SmallPage(PTE_T pte2)
 {
     return (pte2 & MMU_DESCRIPTOR_L2_TYPE_MASK) == MMU_DESCRIPTOR_L2_TYPE_SMALL_PAGE;
 }
 
+//二级页表项类型， small xn
 STATIC INLINE BOOL OsIsPte2SmallPageXN(PTE_T pte2)
 {
     return (pte2 & MMU_DESCRIPTOR_L2_TYPE_MASK) == MMU_DESCRIPTOR_L2_TYPE_SMALL_PAGE_XN;
 }
 
+//二级页表项类型， large 
 STATIC INLINE BOOL OsIsPte2LargePage(PTE_T pte2)
 {
     return (pte2 & MMU_DESCRIPTOR_L2_TYPE_MASK) == MMU_DESCRIPTOR_L2_TYPE_LARGE_PAGE;
 }
 
+//二级页表项类型， 还未使用
 STATIC INLINE BOOL OsIsPte2Invalid(PTE_T pte2)
 {
     return (pte2 & MMU_DESCRIPTOR_L2_TYPE_MASK) == MMU_DESCRIPTOR_L2_TYPE_INVALID;

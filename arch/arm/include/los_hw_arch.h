@@ -39,12 +39,12 @@
 
 #   if defined(__GNUC__)
 #       if defined(__aarch64__)
-#           define LOSCFG_ARM_AARCH64   1
+#           define LOSCFG_ARM_AARCH64   1 //64位ARM
 #       endif
 #
-#       define LOSCFG_ARM_ARCH  __ARM_ARCH
+#       define LOSCFG_ARM_ARCH  __ARM_ARCH //ARM
 #   else
-#       error "unsupported compiler!"
+#       error "unsupported compiler!" //目前只支持用GNUC来编译鸿蒙内核
 #   endif
 
 #endif

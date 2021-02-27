@@ -46,8 +46,7 @@ extern "C" {
 #endif /* __cplusplus */
 
 //地址空间ID管理
-
-STATIC SPIN_LOCK_INIT(g_cpuAsidLock);
+STATIC SPIN_LOCK_INIT(g_cpuAsidLock); //多核互斥访问保护锁
 
 //用一个扩展的位图来管理地址空间ID的分配情况
 STATIC UINTPTR g_asidPool[BITMAP_NUM_WORDS(1UL << MMU_ARM_ASID_BITS)];

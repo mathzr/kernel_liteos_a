@@ -30,26 +30,32 @@
  */
 
 #include "asm.h"
-//longjmp函数实现
+//void longjmp(jmp_buf env,int val);
 FUNCTION(longjmp)
-		//将r4到r12的9个寄存器入栈保存
+		//从env中恢复r4-r12
         ldmfd   r0,{r4-r12}
-        add     r0,#(4 * 9) // r0 += 36
-        ldr     r13,[r0]    // r13 = *r0
-        add     r0,#4       // r0 += 4
-        ldr     r14,[r0]    // r14 = *r0
-        cmp     r1,#0       // if(r1 == 0)
-        moveq   r1,#1       //     r1 = 1
-        mov     r0,r1       // r0 = r1
-        mov     pc,lr       // pc = lr
+        add     r0,#(4 * 9) 
+        //从env中恢复sp
+        ldr     r13,[r0]    
+        add     r0,#4   
+        //从env中恢复lr
+        ldr     r14,[r0] 
+        // if (val == 0)
+        cmp     r1,#0 
+        //       val = 1
+        moveq   r1,#1       
+        mov     r0,r1       // 将返回值设置成val
+        mov     pc,lr       // 返回setjmp的调用方，即setjmp语句之后
 
-//setjmp函数实现
+//int setjmp(jmp_buf env);
 FUNCTION(setjmp)
-		//从栈中恢复寄存器r4到r12的值
-        stmea   r0,{r4-r12}
-        add     r0,#(4 * 9) //r0 += 36
-        str     r13,[r0]    //*r0 = r13
-        add     r0,#4       // r0 += 4
-        str     r14,[r0]    // *r0 = r14
-        mov     r0,#0       // r0 = 0
-        mov     pc,lr       // pc = lr
+		//将r4-r12都存入env中
+        stmea   r0,{r4-r12} 
+        add     r0,#(4 * 9) 
+        //将sp存入env中
+        str     r13,[r0]    
+        add     r0,#4       
+        //将lr存入env中
+        str     r14,[r0]    
+        mov     r0,#0       // 返回值设置成0
+        mov     pc,lr       // 函数返回

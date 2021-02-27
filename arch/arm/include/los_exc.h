@@ -54,15 +54,17 @@ extern "C" {
  * Note: The following register names without uw are the register names used in the chip manual.
  */
 #ifdef LOSCFG_ARCH_ARM_AARCH64
-#define EXC_GEN_REGS_NUM     30
+//64位ARM异常处理
+#define EXC_GEN_REGS_NUM     30  //通用寄存器个数
 typedef struct {
-    UINT64 X[EXC_GEN_REGS_NUM]; /**< Register X0-X29 */
-    UINT64 LR;                  /**< Program returning address. X30 */
-    UINT64 SP;
+    UINT64 X[EXC_GEN_REGS_NUM]; /**< Register X0-X29 */ //通用寄存器列表
+    UINT64 LR;                  /**< Program returning address. X30 */ //程序返回地址
+    UINT64 SP; //栈寄存器
     UINT64 regELR;
     UINT64 SPSR;
 } ExcContext;   //64位ARM异常信息上下文
 #else
+//32位ARM异常处理上下文
 typedef struct {
     UINT32 USP;     /**< User mode stack pointer */
     UINT32 ULR;     /**< User mode program returning address */
@@ -94,11 +96,11 @@ typedef struct {
  *
  */
 typedef struct {
-    UINT16 phase;        /**< Phase in which an exception occurs */
-    UINT16 type;         /**< Exception type */
-    UINT16 nestCnt;      /**< Count of nested exception */
-    UINT16 reserved;     /**< Reserved for alignment */
-    ExcContext *context; /**< Hardware context when an exception occurs */
+    UINT16 phase;        /**< Phase in which an exception occurs */ //异常产生的阶段
+    UINT16 type;         /**< Exception type */ //异常种类
+    UINT16 nestCnt;      /**< Count of nested exception */ //异常嵌套层数
+    UINT16 reserved;     /**< Reserved for alignment */ //用于结构体对齐
+    ExcContext *context; /**< Hardware context when an exception occurs */ //异常发生时的硬件状态
 } ExcInfo; //异常信息控制块
 
 /**
@@ -117,7 +119,7 @@ typedef struct {
  * los_exc.h: the header file that contains the API declaration.
  * @see None.
  */
-STATIC INLINE UINTPTR Get_Fp(VOID)
+STATIC INLINE UINTPTR Get_Fp(VOID)  //获取frame pointer寄存器的内容
 {
     UINTPTR regFp;
 
@@ -147,6 +149,7 @@ STATIC INLINE UINTPTR Get_Fp(VOID)
  * los_exc.h: the header file that contains the API declaration.
  * @see None.
  */
+ //异常处理函数原型
 typedef VOID (*EXC_PROC_FUNC)(UINT32, ExcContext *, UINT32, UINT32);
 
 /**
@@ -165,6 +168,7 @@ typedef VOID (*EXC_PROC_FUNC)(UINT32, ExcContext *, UINT32, UINT32);
  * los_exc.h: the header file that contains the API declaration.
  * @see None.
  */
+ //注册异常处理函数
 extern UINT32 LOS_ExcRegHook(EXC_PROC_FUNC excHook);
 
 /**
@@ -183,6 +187,7 @@ extern UINT32 LOS_ExcRegHook(EXC_PROC_FUNC excHook);
  * los_exc.h: the header file that contains the API declaration.
  * @see None.
  */
+ //内核出错比较严重的时候使用此函数输出当前调用栈等信息
 VOID LOS_Panic(const CHAR *fmt, ...);
 
 /**
@@ -201,6 +206,7 @@ VOID LOS_Panic(const CHAR *fmt, ...);
  * los_exc.h: the header file that contains the API declaration.
  * @see None.
  */
+ //输出调用栈回溯
 extern VOID OsBackTrace(VOID);
 
 /**
@@ -222,6 +228,7 @@ extern VOID OsBackTrace(VOID);
  * los_exc.h: the header file that contains the API declaration.
  * @see None.
  */
+ //输出指定任务的调用栈
 extern VOID OsTaskBackTrace(UINT32 taskID);
 
 #ifdef __cplusplus
