@@ -281,13 +281,14 @@ STATIC const CHAR *g_excTypeString[] = {
     "software interrupt",    //软件中断
     "prefetch abort",        //取指令异常
     "data abort",            //取数据异常
-    "fiq",                   //fiq ?
-    "address abort",         //地址总线异常 ？
-    "irq"                    //中断 ?
+    "fiq",                   //快速中断
+    "address abort",         //地址总线异常 
+    "irq"                    //中断 
 };
 
 
-//获取当前进程代码区首地址
+//当前内存区是代码区的其中一个内存区
+//通过向前查找，选择第一个内存区(当然，也可能只有这1个代码内存区)
 STATIC VADDR_T OsGetTextRegionBase(LosVmMapRegion *region, LosProcessCB *runProcess)
 {
     struct file *curFilep = NULL;
@@ -300,19 +301,22 @@ STATIC VADDR_T OsGetTextRegionBase(LosVmMapRegion *region, LosProcessCB *runProc
     }
 
     if (!LOS_IsRegionFileValid(region)) {
-        return region->range.base;
+        return region->range.base;  //如果内存区与文件无关，那么直接返回内存区首地址
     }
 
-    lastRegion = region;
+    lastRegion = region;  //内存区关联代码文件的情况下，代码文件可以分多次加载到内存，每次关联一个内存区
     do {
         curRegion = lastRegion;
+		//查找与本内存区相邻的上一个内存区
         lastRegion = LOS_RegionFind(runProcess->vmSpace, curRegion->range.base - 1);
         if ((lastRegion == NULL) || !LOS_IsRegionFileValid(lastRegion)) {
-            goto DONE;
+            goto DONE; //没有上一个内存区了，或者上一个内存区不与文件关联，那么本内存区就是
+            //代码映射的第1个内存区
         }
         curFilep = curRegion->unTypeData.rf.file;
         lastFilep = lastRegion->unTypeData.rf.file;
-    } while (!strcmp(curFilep->f_path, lastFilep->f_path));
+    } while (!strcmp(curFilep->f_path, lastFilep->f_path));  //上一个内存区映射了另外一个文件
+    //那么本内存区也应该是代码区的第1个内存区
 
 DONE:
     if (curRegion->range.base == EXEC_MMAP_BASE) {
@@ -321,6 +325,7 @@ DONE:
     return curRegion->range.base;
 }
 
+//输出异常状况下的系统诊断信息
 STATIC VOID OsExcSysInfo(UINT32 excType, const ExcContext *excBufAddr)
 {
     LosTaskCB *runTask = OsCurrTaskGet();
@@ -352,8 +357,10 @@ STATIC VOID OsExcSysInfo(UINT32 excType, const ExcContext *excBufAddr)
     PrintExcInfo("pc    = 0x%x ", excBufAddr->PC);
     if (g_excFromUserMode[ArchCurrCpuid()] == TRUE) {
         if (LOS_IsUserAddress((vaddr_t)excBufAddr->PC)) {
+			//用户态程序触发的异常
             region = LOS_RegionFind(runProcess->vmSpace, (VADDR_T)excBufAddr->PC);
             if (region != NULL) {
+				//输出异常产生的位置--异常代码相对于代码区首地址的偏移
                 PrintExcInfo("in %s ---> 0x%x", OsGetRegionNameOrFilePath(region),
                              (VADDR_T)excBufAddr->PC - OsGetTextRegionBase(region, runProcess));
             }
@@ -362,6 +369,7 @@ STATIC VOID OsExcSysInfo(UINT32 excType, const ExcContext *excBufAddr)
         PrintExcInfo("\nulr   = 0x%x ", excBufAddr->ULR);
         region = LOS_RegionFind(runProcess->vmSpace, (VADDR_T)excBufAddr->ULR);
         if (region != NULL) {
+			//产生异常的函数的调用方的地址
             PrintExcInfo("in %s ---> 0x%x", OsGetRegionNameOrFilePath(region),
                          (VADDR_T)excBufAddr->ULR - OsGetTextRegionBase(region, runProcess));
         }
@@ -376,6 +384,8 @@ STATIC VOID OsExcSysInfo(UINT32 excType, const ExcContext *excBufAddr)
     PrintExcInfo("fp    = 0x%x\n", excBufAddr->R11);
 }
 
+
+//输出寄存器诊断信息
 STATIC VOID OsExcRegsInfo(const ExcContext *excBufAddr)
 {
     /*
@@ -402,6 +412,7 @@ STATIC VOID OsExcRegsInfo(const ExcContext *excBufAddr)
                  excBufAddr->R11, excBufAddr->R12, excBufAddr->regCPSR);
 }
 
+//异常处理函数注册
 LITE_OS_SEC_TEXT_INIT UINT32 LOS_ExcRegHook(EXC_PROC_FUNC excHook)
 {
     UINT32 intSave;
@@ -413,11 +424,14 @@ LITE_OS_SEC_TEXT_INIT UINT32 LOS_ExcRegHook(EXC_PROC_FUNC excHook)
     return LOS_OK;
 }
 
+//异常处理函数获取
 EXC_PROC_FUNC OsExcRegHookGet(VOID)
 {
     return g_excHook;
 }
 
+
+//输出异常地址对应的区域相关信息
 STATIC VOID OsDumpExcVaddrRegion(LosVmSpace *space, LosVmMapRegion *region)
 {
     INT32 i, numPages, pageCount;
@@ -425,41 +439,45 @@ STATIC VOID OsDumpExcVaddrRegion(LosVmSpace *space, LosVmMapRegion *region)
     vaddr_t pageBase;
     BOOL mmuFlag = FALSE;
 
-    numPages = region->range.size >> PAGE_SHIFT;
+    numPages = region->range.size >> PAGE_SHIFT; //本内存区对应的内存页数目
     mmuFlag = TRUE;
+	//遍历内存页
     for (pageCount = 0, startPaddr = 0, startVaddr = 0, i = 0; i < numPages; i++) {
         pageBase = region->range.base + i * PAGE_SIZE;
         addr = 0;
+		//查询是否已存在物理页
         if (LOS_ArchMmuQuery(&space->archMmu, pageBase, &addr, NULL) != LOS_OK) {
             if (startPaddr == 0) {
-                continue;
+                continue; //物理页不存在
             }
         } else if (startPaddr == 0) {
-            startVaddr = pageBase;
-            startPaddr = addr;
+            startVaddr = pageBase; //起始物理页对应的虚拟页
+            startPaddr = addr;  //起始物理页
             oldAddr = addr;
             pageCount++;
             if (numPages > 1) {
-                continue;
+                continue; //继续处理下一页对应的物理页
             }
-        } else if (addr == (oldAddr + PAGE_SIZE)) {
-            pageCount++;
+        } else if (addr == (oldAddr + PAGE_SIZE)) { //与上一个物理内存页连续
+            pageCount++; //连续物理页计数
             oldAddr = addr;
             if (i < (numPages - 1)) {
-                continue;
+                continue; //继续统计连续物理页
             }
         }
+		//遇到第一个不连续的物理页，把上一段连续物理页相关信息输出一下
         if (mmuFlag == TRUE) {
             PrintExcInfo("       uvaddr       kvaddr       mapped size\n");
             mmuFlag = FALSE;
         }
         PrintExcInfo("       0x%08x   0x%08x   0x%08x\n",
                      startVaddr, LOS_PaddrToKVaddr(startPaddr), pageCount << PAGE_SHIFT);
-        pageCount = 0;
-        startPaddr = 0;
+        pageCount = 0;  //继续统计下一段连续的物理页
+        startPaddr = 0; //继续统计下一段连续的物理页
     }
 }
 
+//打印输出进程地址空间中正在使用的内存区的相关信息
 STATIC VOID OsDumpProcessUsedMemRegion(LosProcessCB *runProcess, LosVmSpace *runspace, UINT16 vmmFlags)
 {
     LosVmMapRegion *region = NULL;
@@ -468,10 +486,13 @@ STATIC VOID OsDumpProcessUsedMemRegion(LosProcessCB *runProcess, LosVmSpace *run
     UINT32 count = 0;
 
     /* search the region list */
+	//遍历所有内存区
     RB_SCAN_SAFE(&runspace->regionRbTree, pstRbNodeTemp, pstRbNodeNext)
         region = (LosVmMapRegion *)pstRbNodeTemp;
+		//输出本内存区简要信息
         PrintExcInfo("%3u -> regionBase: 0x%08x regionSize: 0x%08x\n", count, region->range.base, region->range.size);
         if (vmmFlags == OS_EXC_VMM_ALL_REGION) {
+			//输出本内存区详细信息
             OsDumpExcVaddrRegion(runspace, region);
         }
         count++;
@@ -479,6 +500,8 @@ STATIC VOID OsDumpProcessUsedMemRegion(LosProcessCB *runProcess, LosVmSpace *run
     RB_SCAN_SAFE_END(&space->regionRbTree, pstRbNodeTemp, pstRbNodeNext)
 }
 
+
+//打印输出当前进程的内存区
 STATIC VOID OsDumpProcessUsedMemNode(UINT16 vmmFalgs)
 {
     LosProcessCB *runProcess = NULL;
@@ -490,7 +513,7 @@ STATIC VOID OsDumpProcessUsedMemNode(UINT16 vmmFalgs)
     }
 
     if (!OsProcessIsUserMode(runProcess)) {
-        return;
+        return; //只输出用户态进程的内存信息
     }
 
     PrintExcInfo("\n   ******Current process %u vmm regions: ******\n", runProcess->processID);
@@ -504,14 +527,17 @@ STATIC VOID OsDumpProcessUsedMemNode(UINT16 vmmFalgs)
     return;
 }
 
+
+//打印输出异常上下文信息
 VOID OsDumpContextMem(const ExcContext *excBufAddr)
 {
     UINT32 count = 0;
     const UINT32 *excReg = NULL;
     if (g_excFromUserMode[ArchCurrCpuid()] == TRUE) {
-        return;
+        return;  //只输出内核模式下的异常相关信息
     }
 
+	//输出相关寄存器所表明的内存区
     for (excReg = &(excBufAddr->R0); count <= DUMPREGS; excReg++, count++) {
         if (IS_VALID_ADDR(*excReg)) {
             PrintExcInfo("\ndump mem around R%u:%p", count, (*excReg));
@@ -519,6 +545,7 @@ VOID OsDumpContextMem(const ExcContext *excBufAddr)
         }
     }
 
+	//输出栈空间的部分内容
     if (IS_VALID_ADDR(excBufAddr->SP)) {
         PrintExcInfo("\ndump mem around SP:%p", excBufAddr->SP);
         OsDumpMemByte(DUMPSIZE, (excBufAddr->SP - (DUMPSIZE >> 1)));

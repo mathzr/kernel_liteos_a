@@ -48,24 +48,24 @@ LITE_OS_SEC_BSS  SPIN_LOCK_INIT(g_hwiSpin);
 #define HWI_LOCK(state)       LOS_SpinLockSave(&g_hwiSpin, &(state))
 #define HWI_UNLOCK(state)     LOS_SpinUnlockRestore(&g_hwiSpin, (state))
 
-size_t g_intCount[LOSCFG_KERNEL_CORE_NUM] = {0};
-HwiHandleForm g_hwiForm[OS_HWI_MAX_NUM];
-STATIC CHAR *g_hwiFormName[OS_HWI_MAX_NUM] = {0};
-STATIC UINT32 g_hwiFormCnt[OS_HWI_MAX_NUM] = {0};
+size_t g_intCount[LOSCFG_KERNEL_CORE_NUM] = {0}; //每个核当前待处理的中断信号数目
+HwiHandleForm g_hwiForm[OS_HWI_MAX_NUM]; //中断向量表
+STATIC CHAR *g_hwiFormName[OS_HWI_MAX_NUM] = {0}; //中断名称列表
+STATIC UINT32 g_hwiFormCnt[OS_HWI_MAX_NUM] = {0}; //每个中断产生的次数
 
 VOID OsIncHwiFormCnt(UINT32 index)
 {
-    g_hwiFormCnt[index]++;
+    g_hwiFormCnt[index]++; //统计某中断产生的次数
 }
 
 UINT32 OsGetHwiFormCnt(UINT32 index)
 {
-    return g_hwiFormCnt[index];
+    return g_hwiFormCnt[index]; //获取某中断产生的次数
 }
 
 CHAR *OsGetHwiFormName(UINT32 index)
 {
-    return g_hwiFormName[index];
+    return g_hwiFormName[index]; //获取某中断的名称
 }
 
 typedef VOID (*HWI_PROC_FUNC0)(VOID);
@@ -76,43 +76,46 @@ VOID OsInterrupt(UINT32 intNum)
     UINT32 *intCnt = NULL;
 
     intCnt = &g_intCount[ArchCurrCpuid()];
-    *intCnt = *intCnt + 1;
+    *intCnt = *intCnt + 1;  //增加当前CPU核的中断计数
 
 #ifdef LOSCFG_CPUP_INCLUDE_IRQ
-    OsCpupIrqStart();
+    OsCpupIrqStart();  //中断运维统计
 #endif
 
 #ifdef LOSCFG_KERNEL_TICKLESS
-    OsTicklessUpdate(intNum);
+    OsTicklessUpdate(intNum);  //低功耗状态下中断特殊处理
 #endif
-    hwiForm = (&g_hwiForm[intNum]);
+    hwiForm = (&g_hwiForm[intNum]); //中断向量
 #ifndef LOSCFG_NO_SHARED_IRQ
-    while (hwiForm->pstNext != NULL) {
+    while (hwiForm->pstNext != NULL) {  //如果是共享中断，则有多个处理函数
         hwiForm = hwiForm->pstNext;
 #endif
         if (hwiForm->uwParam) {
             HWI_PROC_FUNC2 func = (HWI_PROC_FUNC2)hwiForm->pfnHook;
             if (func != NULL) {
                 UINTPTR *param = (UINTPTR *)(hwiForm->uwParam);
+				//如果支持参数的话，传递2个参数来调用处理函数
                 func((INT32)(*param), (VOID *)(*(param + 1)));
             }
         } else {
             HWI_PROC_FUNC0 func = (HWI_PROC_FUNC0)hwiForm->pfnHook;
             if (func != NULL) {
+				//否则，以无参方式调用处理函数
                 func();
             }
         }
 #ifndef LOSCFG_NO_SHARED_IRQ
     }
 #endif
-    ++g_hwiFormCnt[intNum];
+    ++g_hwiFormCnt[intNum];  //本中断号对应的中断处理次数增加
 
-    *intCnt = *intCnt - 1;
+    *intCnt = *intCnt - 1;  //本CPU当前待处理中断减少
 #ifdef LOSCFG_CPUP_INCLUDE_IRQ
-    OsCpupIrqEnd(intNum);
+    OsCpupIrqEnd(intNum);  //中断状态下运维统计
 #endif
 }
 
+//中断参数拷贝
 STATIC HWI_ARG_T OsHwiCpIrqParam(const HwiIrqParam *irqParam)
 {
     HwiIrqParam *paramByAlloc = NULL;
@@ -128,14 +131,16 @@ STATIC HWI_ARG_T OsHwiCpIrqParam(const HwiIrqParam *irqParam)
     return (HWI_ARG_T)paramByAlloc;
 }
 
-#ifdef LOSCFG_NO_SHARED_IRQ
+#ifdef LOSCFG_NO_SHARED_IRQ  //不支持共享中断的产品
+//注销中断
 STATIC UINT32 OsHwiDelNoShared(HWI_HANDLE_T hwiNum)
 {
     UINT32 intSave;
 
     HWI_LOCK(intSave);
-    g_hwiForm[hwiNum].pfnHook = NULL;
+    g_hwiForm[hwiNum].pfnHook = NULL; //注销中断处理函数
     if (g_hwiForm[hwiNum].uwParam) {
+		//释放中断参数
         (VOID)LOS_MemFree(m_aucSysMem0, (VOID *)g_hwiForm[hwiNum].uwParam);
     }
     g_hwiForm[hwiNum].uwParam = 0;
@@ -144,6 +149,8 @@ STATIC UINT32 OsHwiDelNoShared(HWI_HANDLE_T hwiNum)
     return LOS_OK;
 }
 
+
+//注册中断
 STATIC UINT32 OsHwiCreateNoShared(HWI_HANDLE_T hwiNum, HWI_MODE_T hwiMode,
                                   HWI_PROC_FUNC hwiHandler, const HwiIrqParam *irqParam)
 {
@@ -152,22 +159,24 @@ STATIC UINT32 OsHwiCreateNoShared(HWI_HANDLE_T hwiNum, HWI_MODE_T hwiMode,
 
     HWI_LOCK(intSave);
     if (g_hwiForm[hwiNum].pfnHook == NULL) {
+		//注册中断处理函数
         g_hwiForm[hwiNum].pfnHook = hwiHandler;
 
-        retParam = OsHwiCpIrqParam(irqParam);
+        retParam = OsHwiCpIrqParam(irqParam); //创建中断参数
         if (retParam == LOS_NOK) {
             HWI_UNLOCK(intSave);
             return OS_ERRNO_HWI_NO_MEMORY;
         }
-        g_hwiForm[hwiNum].uwParam = retParam;
+        g_hwiForm[hwiNum].uwParam = retParam; //注册参数
     } else {
-        HWI_UNLOCK(intSave);
+        HWI_UNLOCK(intSave); //中断已注册
         return OS_ERRNO_HWI_ALREADY_CREATED;
     }
     HWI_UNLOCK(intSave);
     return LOS_OK;
 }
-#else
+#else   //支持共享中断的产品
+//注销中断
 STATIC UINT32 OsHwiDelShared(HWI_HANDLE_T hwiNum, const HwiIrqParam *irqParam)
 {
     HwiHandleForm *hwiForm = NULL;
@@ -176,34 +185,39 @@ STATIC UINT32 OsHwiDelShared(HWI_HANDLE_T hwiNum, const HwiIrqParam *irqParam)
     UINT32 intSave;
 
     HWI_LOCK(intSave);
-    hwiForm = &g_hwiForm[hwiNum];
+    hwiForm = &g_hwiForm[hwiNum]; //此中断号对应的中断表
     hwiFormtmp = hwiForm;
 
     if ((hwiForm->uwParam & IRQF_SHARED) && ((irqParam == NULL) || (irqParam->pDevId == NULL))) {
-        HWI_UNLOCK(intSave);
+        HWI_UNLOCK(intSave); //共享中断需要用devid来区分处理此中断信号的设备
         return OS_ERRNO_HWI_SHARED_ERROR;
     }
 
     if ((hwiForm->pstNext != NULL) && !(hwiForm->uwParam & IRQF_SHARED)) {
+		//当前中断不是共享中断，直接注销
         hwiForm = hwiForm->pstNext;
         if (hwiForm->uwParam) {
+			//释放中断参数
             (VOID)LOS_MemFree(m_aucSysMem0, (VOID *)hwiForm->uwParam);
         }
-        (VOID)LOS_MemFree(m_aucSysMem0, hwiForm);
+        (VOID)LOS_MemFree(m_aucSysMem0, hwiForm); //释放中断描述符
         hwiFormtmp->pstNext = NULL;
 
-        g_hwiFormName[hwiNum] = NULL;
+        g_hwiFormName[hwiNum] = NULL; //注销此中断号对应的中断表
 
         HWI_UNLOCK(intSave);
         return LOS_OK;
     }
+	//对于共享中断
     hwiForm = hwiForm->pstNext;
-    while (hwiForm != NULL) {
+    while (hwiForm != NULL) { //则遍历所有共享此中断号的中断驱动
         if (((HwiIrqParam *)(hwiForm->uwParam))->pDevId != irqParam->pDevId) {
-            hwiFormtmp = hwiForm;
+            hwiFormtmp = hwiForm; //查找devid匹配的中断驱动
             hwiForm = hwiForm->pstNext;
         } else {
+			//查找成功，将对应的中断驱动从共享中断队列中移除
             hwiFormtmp->pstNext = hwiForm->pstNext;
+			//并释放中断描述符
             (VOID)LOS_MemFree(m_aucSysMem0, (VOID *)hwiForm->uwParam);
             (VOID)LOS_MemFree(m_aucSysMem0, hwiForm);
 
@@ -214,18 +228,20 @@ STATIC UINT32 OsHwiDelShared(HWI_HANDLE_T hwiNum, const HwiIrqParam *irqParam)
 
     if (hwiValid != TRUE) {
         HWI_UNLOCK(intSave);
-        return OS_ERRNO_HWI_HWINUM_UNCREATE;
+        return OS_ERRNO_HWI_HWINUM_UNCREATE; //对应的中断不存在，注销失败
     }
 
-    if (g_hwiForm[hwiNum].pstNext == NULL) {
+    if (g_hwiForm[hwiNum].pstNext == NULL) { //如果本中断号所有共享中断都已注销
         g_hwiForm[hwiNum].uwParam = 0;
-        g_hwiFormName[hwiNum] = NULL;
+        g_hwiFormName[hwiNum] = NULL; //取消此中断号对应的名称
     }
 
     HWI_UNLOCK(intSave);
     return LOS_OK;
 }
 
+
+//注册中断
 STATIC UINT32 OsHwiCreateShared(HWI_HANDLE_T hwiNum, HWI_MODE_T hwiMode,
                                 HWI_PROC_FUNC hwiHandler, const HwiIrqParam *irqParam)
 {
@@ -236,26 +252,27 @@ STATIC UINT32 OsHwiCreateShared(HWI_HANDLE_T hwiNum, HWI_MODE_T hwiMode,
     HWI_MODE_T modeResult = hwiMode & IRQF_SHARED;
 
     if (modeResult && ((irqParam == NULL) || (irqParam->pDevId == NULL))) {
-        return OS_ERRNO_HWI_SHARED_ERROR;
+        return OS_ERRNO_HWI_SHARED_ERROR; //共享中断需要由设备号来区分
     }
 
     HWI_LOCK(intSave);
 
     hwiForm = &g_hwiForm[hwiNum];
     if ((hwiForm->pstNext != NULL) && ((modeResult == 0) || (!(hwiForm->uwParam & IRQF_SHARED)))) {
-        HWI_UNLOCK(intSave);
-        return OS_ERRNO_HWI_SHARED_ERROR;
+        HWI_UNLOCK(intSave); //1个中断号只能有一个普通中断
+        return OS_ERRNO_HWI_SHARED_ERROR; //且共享中断和普通中断不能共存
     }
 
     while (hwiForm->pstNext != NULL) {
         hwiForm = hwiForm->pstNext;
         hwiParam = (HwiIrqParam *)(hwiForm->uwParam);
         if (hwiParam->pDevId == irqParam->pDevId) {
-            HWI_UNLOCK(intSave);
+            HWI_UNLOCK(intSave);  //此设备号对应的共享中断已存在
             return OS_ERRNO_HWI_ALREADY_CREATED;
         }
     }
 
+	//创建新的共享中断描述符，并初始化相关数据
     hwiFormNode = (HwiHandleForm *)LOS_MemAlloc(m_aucSysMem0, sizeof(HwiHandleForm));
     if (hwiFormNode == NULL) {
         HWI_UNLOCK(intSave);
@@ -270,14 +287,16 @@ STATIC UINT32 OsHwiCreateShared(HWI_HANDLE_T hwiNum, HWI_MODE_T hwiMode,
     }
 
     hwiFormNode->pfnHook = hwiHandler;
+	//放入共享中断链表末尾
     hwiFormNode->pstNext = (struct tagHwiHandleForm *)NULL;
-    hwiForm->pstNext = hwiFormNode;
+    hwiForm->pstNext = hwiFormNode;  
 
     if ((irqParam != NULL) && (irqParam->pName != NULL)) {
+		//刷新共享中断的名称
         g_hwiFormName[hwiNum] = (CHAR *)irqParam->pName;
     }
 
-    g_hwiForm[hwiNum].uwParam = modeResult;
+    g_hwiForm[hwiNum].uwParam = modeResult;  //标识当前中断号注册的是否共享中断
 
     HWI_UNLOCK(intSave);
     return LOS_OK;
@@ -287,23 +306,28 @@ STATIC UINT32 OsHwiCreateShared(HWI_HANDLE_T hwiNum, HWI_MODE_T hwiMode,
 /*
  * Description : initialization of the hardware interrupt
  */
+ //中断模块的初始化
 LITE_OS_SEC_TEXT_INIT VOID OsHwiInit(VOID)
 {
     UINT32 hwiNum;
 
+	//遍历所有中断号
     for (hwiNum = 0; hwiNum < OS_HWI_MAX_NUM; hwiNum++) {
-        g_hwiForm[hwiNum].pfnHook = NULL;
-        g_hwiForm[hwiNum].uwParam = 0;
-        g_hwiForm[hwiNum].pstNext = NULL;
+        g_hwiForm[hwiNum].pfnHook = NULL; //置空处理函数
+        g_hwiForm[hwiNum].uwParam = 0;    //
+        g_hwiForm[hwiNum].pstNext = NULL; //空链表
     }
 
+	//当前无任何中断名称
     (VOID)memset_s(g_hwiFormName, (sizeof(CHAR *) * OS_HWI_MAX_NUM), 0, (sizeof(CHAR *) * OS_HWI_MAX_NUM));
 
-    HalIrqInit();
+    HalIrqInit();  //硬件中断初始化
 
     return;
 }
 
+
+//注册硬件中断，API封装
 LITE_OS_SEC_TEXT_INIT UINT32 LOS_HwiCreate(HWI_HANDLE_T hwiNum,
                                            HWI_PRIOR_T hwiPrio,
                                            HWI_MODE_T hwiMode,
@@ -328,6 +352,7 @@ LITE_OS_SEC_TEXT_INIT UINT32 LOS_HwiCreate(HWI_HANDLE_T hwiNum,
     return ret;
 }
 
+//注销硬件中断，API封装
 LITE_OS_SEC_TEXT_INIT UINT32 LOS_HwiDelete(HWI_HANDLE_T hwiNum, HwiIrqParam *irqParam)
 {
     UINT32 ret;

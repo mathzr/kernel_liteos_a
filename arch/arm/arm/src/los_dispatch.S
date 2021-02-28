@@ -91,72 +91,74 @@
 /* R0: new task */
 OsStartToRun:
 
-    MSR     CPSR_c, #(CPSR_INT_DISABLE | CPSR_SVC_MODE)
+    MSR     CPSR_c, #(CPSR_INT_DISABLE | CPSR_SVC_MODE) //特权模式，关中断
 
-    LDRH    R1, [R0, #4]
-    ORR     R1, #OS_TASK_STATUS_RUNNING
-    STRH    R1, [R0, #4]
+    LDRH    R1, [R0, #4]  //获取任务状态
+    ORR     R1, #OS_TASK_STATUS_RUNNING //设置任务为运行态
+    STRH    R1, [R0, #4]  //存回任务状态
 
     /* R0 is new task, save it on tpidrprw */
-    MCR     p15, 0, R0, c13, c0, 4
-    ISB
+    MCR     p15, 0, R0, c13, c0, 4  //任务ID存入系统寄存器
+    ISB  //等待上一条指令执行完成
 
+	
     VPUSH   {S0}                                     /* fpu */
     VPOP    {S0}
     VPUSH   {D0}
     VPOP    {D0}
 
-    B       OsTaskContextLoad
+    B       OsTaskContextLoad //跳转到任务切换过程
 
 /*
  * R0: new task
  * R1: run task
  */
+ //任务调度
 OsTaskSchedule:
-    MRS      R2, CPSR
-    STMFD    SP!, {LR}
-    STMFD    SP!, {LR}
+    MRS      R2, CPSR  //读取CPSR寄存器到R2中
+    STMFD    SP!, {LR} //压栈备份LR
+    STMFD    SP!, {LR} //压栈备份LR
     /* jump sp */
-    SUB      SP, SP, #4
+    SUB      SP, SP, #4 //栈留4字节空
 
     /* push r0-r12*/
-    STMFD    SP!, {R0-R12}
-    STMFD    SP!, {R2}
+    STMFD    SP!, {R0-R12} //压栈保留R0-R12
+    STMFD    SP!, {R2}     //压栈保留R2
 
     /* 8 bytes stack align */
-    SUB      SP, SP, #4
+    SUB      SP, SP, #4  //栈留4字节空
 
     /* save fpu registers */
-    PUSH_FPU_REGS   R2
+    PUSH_FPU_REGS   R2  //压栈保留各浮点寄存器
 
     /* store sp on running task */
-    STR     SP, [R1]
+    STR     SP, [R1]    //当前新栈顶存入task控制块中
 
 OsTaskContextLoad:
     /* clear the flag of ldrex */
     CLREX
 
     /* switch to new task's sp */
-    LDR     SP, [R0]
+    LDR     SP, [R0]  //读取新任务的栈顶指针
 
     /* restore fpu registers */
-    POP_FPU_REGS    R2
+    POP_FPU_REGS    R2  //恢复浮点运算寄存器
 
     /* 8 bytes stack align */
-    ADD     SP, SP, #4
+    ADD     SP, SP, #4  //跳过无用的4字节栈空间
 
-    LDMFD   SP!, {R0}
+    LDMFD   SP!, {R0}   //
     MOV     R4, R0
     AND     R0, R0, #CPSR_MASK_MODE
-    CMP     R0, #CPSR_USER_MODE
-    BNE     OsKernelTaskLoad
+    CMP     R0, #CPSR_USER_MODE  //判断CPU模式
+    BNE     OsKernelTaskLoad     //内核态则跳转内核任务加载
 
 #ifdef LOSCFG_KERNEL_SMP
 #ifdef LOSCFG_KERNEL_SMP_LOCKDEP
     /* 8 bytes stack align */
     SUB     SP, SP, #4
     LDR     R0, =g_taskSpin
-    BL      OsLockDepCheckOut
+    BL      OsLockDepCheckOut //获取task自旋锁
     ADD     SP, SP, #4
 #endif
     /* R0 = &g_taskSpin.rawLock */
