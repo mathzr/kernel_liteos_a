@@ -40,6 +40,7 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//错误码的转换，从liteos转换成posix标准
 int map_errno(UINT32 err)
 {
     if (err == LOS_OK) {

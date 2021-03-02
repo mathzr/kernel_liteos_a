@@ -47,10 +47,13 @@ extern "C" {
 #define FNONBLOCK   O_NONBLOCK
 
 /* GLOBALS */
+//系统最多支持LOSCFG_BASE_IPC_QUEUE_LIMIT个消息队列
 STATIC struct mqarray g_queueTable[LOSCFG_BASE_IPC_QUEUE_LIMIT];
+//操作消息队列需要互斥锁保护
 STATIC pthread_mutex_t g_mqueueMutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 
 /* LOCAL FUNCTIONS */
+//消息队列名称检查
 STATIC INLINE INT32 MqNameCheck(const CHAR *mqName)
 {
     if (mqName == NULL) {
@@ -59,17 +62,18 @@ STATIC INLINE INT32 MqNameCheck(const CHAR *mqName)
     }
 
     if (strlen(mqName) == 0) {
-        errno = EINVAL;
+        errno = EINVAL;  
         return -1;
     }
 
     if (strlen(mqName) > (PATH_MAX - 1)) {
-        errno = ENAMETOOLONG;
+        errno = ENAMETOOLONG;  //名称太长
         return -1;
     }
     return 0;
 }
 
+//从消息队列ID获取控制块
 STATIC INLINE UINT32 GetMqueueCBByID(UINT32 queueID, LosQueueCB **queueCB)
 {
     LosQueueCB *tmpQueueCB = NULL;
@@ -79,43 +83,47 @@ STATIC INLINE UINT32 GetMqueueCBByID(UINT32 queueID, LosQueueCB **queueCB)
     }
     tmpQueueCB = GET_QUEUE_HANDLE(queueID);
     if ((GET_QUEUE_INDEX(queueID) >= LOSCFG_BASE_IPC_QUEUE_LIMIT) || (tmpQueueCB->queueID != queueID)) {
-        return LOS_ERRNO_QUEUE_INVALID;
+        return LOS_ERRNO_QUEUE_INVALID; //消息队列不存在，或者消息队列已被删除
     }
     *queueCB = tmpQueueCB;
 
     return LOS_OK;
 }
 
+//根据名称获取消息队列
 STATIC INLINE struct mqarray *GetMqueueCBByName(const CHAR *name)
 {
     UINT32 index;
     UINT32 mylen = strlen(name);
 
+	//遍历消息队列
     for (index = 0; index < LOSCFG_BASE_IPC_QUEUE_LIMIT; index++) {
         if ((g_queueTable[index].mq_name == NULL) || (strlen(g_queueTable[index].mq_name) != mylen)) {
-            continue;
+            continue; //当前消息队列没有名称，或者名称长度不是我想找的
         }
 
         if (strncmp(name, (const CHAR *)(g_queueTable[index].mq_name), mylen) == 0) {
-            return &(g_queueTable[index]);
+            return &(g_queueTable[index]);  //找到同名的消息队列
         }
     }
 
     return NULL;
 }
 
+//删除消息队列控制块
 STATIC INT32 DoMqueueDelete(struct mqarray *mqueueCB)
 {
     UINT32 ret;
 
     if (mqueueCB->mq_name != NULL) {
+		//释放消息队列名称
         LOS_MemFree(OS_SYS_MEM_ADDR, mqueueCB->mq_name);
         mqueueCB->mq_name = NULL;
     }
 
-    mqueueCB->mqcb = NULL;
+    mqueueCB->mqcb = NULL;  //解除对底层消息队列的引用
 
-    ret = LOS_QueueDelete(mqueueCB->mq_id);
+    ret = LOS_QueueDelete(mqueueCB->mq_id); //通知底层删除消息队列
     switch (ret) {
         case LOS_OK:
             return 0;
@@ -131,11 +139,13 @@ STATIC INT32 DoMqueueDelete(struct mqarray *mqueueCB)
     }
 }
 
+//保存消息队列明名称
 STATIC int SaveMqueueName(const CHAR *mqName, struct mqarray *mqueueCB)
 {
     size_t nameLen;
 
     nameLen = strlen(mqName); /* sys_mq_open has checked name and name length */
+	//额外申请名称字符串内存
     mqueueCB->mq_name = (char *)LOS_MemAlloc(OS_SYS_MEM_ADDR, nameLen + 1);
     if (mqueueCB->mq_name == NULL) {
         errno = ENOMEM;
@@ -148,15 +158,17 @@ STATIC int SaveMqueueName(const CHAR *mqName, struct mqarray *mqueueCB)
         errno = EINVAL;
         return LOS_NOK;
     }
-    mqueueCB->mq_name[nameLen] = '\0';
+    mqueueCB->mq_name[nameLen] = '\0'; //字符串结尾符不能遗漏
     return LOS_OK;
 }
 
+//创建消息队列
 STATIC struct mqpersonal *DoMqueueCreate(const struct mq_attr *attr, const CHAR *mqName, INT32 openFlag)
 {
     struct mqarray *mqueueCB = NULL;
     UINT32 mqueueID;
 
+	//调用底层创建
     UINT32 err = LOS_QueueCreate(NULL, attr->mq_maxmsg, &mqueueID, 0, attr->mq_msgsize);
     if (map_errno(err) != ENOERR) {
         goto ERROUT;
@@ -164,7 +176,7 @@ STATIC struct mqpersonal *DoMqueueCreate(const struct mq_attr *attr, const CHAR 
 
     if (g_queueTable[GET_QUEUE_INDEX(mqueueID)].mqcb == NULL) {
         mqueueCB = &(g_queueTable[GET_QUEUE_INDEX(mqueueID)]);
-        mqueueCB->mq_id = mqueueID;
+        mqueueCB->mq_id = mqueueID; //记录底层的消息队列ID
     }
 
     if (mqueueCB == NULL) {
@@ -173,14 +185,15 @@ STATIC struct mqpersonal *DoMqueueCreate(const struct mq_attr *attr, const CHAR 
     }
 
     if (SaveMqueueName(mqName, mqueueCB) != LOS_OK) {
-        goto ERROUT;
+        goto ERROUT; //保存消息队列名称
     }
 
     if (GetMqueueCBByID(mqueueCB->mq_id, &(mqueueCB->mqcb)) != LOS_OK) {
-        errno = ENOSPC;
+        errno = ENOSPC; //再次获取底层消息队列控制块失败，说明创建失败
         goto ERROUT;
     }
 
+	//创建消息队列附加私有信息
     mqueueCB->mq_personal = (struct mqpersonal *)LOS_MemAlloc(OS_SYS_MEM_ADDR, sizeof(struct mqpersonal));
     if (mqueueCB->mq_personal == NULL) {
         (VOID)LOS_QueueDelete(mqueueCB->mq_id);
@@ -206,6 +219,7 @@ ERROUT:
     return (struct mqpersonal *)-1;
 }
 
+//打开消息队列
 STATIC struct mqpersonal *DoMqueueOpen(struct mqarray *mqueueCB, INT32 openFlag)
 {
     struct mqpersonal *privateMqPersonal = NULL;

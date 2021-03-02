@@ -52,7 +52,7 @@ STATIC INLINE BOOL ValidTimeSpec(const struct timespec *tp)
 
     /* Fail illegal nanosecond values */
     if ((tp->tv_nsec < 0) || (tp->tv_nsec >= OS_SYS_NS_PER_SECOND) || (tp->tv_sec < 0)) {
-        return FALSE;
+        return FALSE; //秒和纳秒的值要在合法范围内
     }
 
     return TRUE;
@@ -62,8 +62,9 @@ STATIC INLINE UINT32 OsTimeSpec2Tick(const struct timespec *tp)
 {
     UINT64 tick, ns;
 
-    ns = (UINT64)tp->tv_sec * OS_SYS_NS_PER_SECOND + tp->tv_nsec;
+    ns = (UINT64)tp->tv_sec * OS_SYS_NS_PER_SECOND + tp->tv_nsec; //换算成纳秒
     /* Round up for ticks */
+	//从纳秒转换成tick, 向上取整
     tick = (ns * LOSCFG_BASE_CORE_TICK_PER_SECOND + (OS_SYS_NS_PER_SECOND - 1)) / OS_SYS_NS_PER_SECOND;
     if (tick > LOS_WAIT_FOREVER) {
         tick = LOS_WAIT_FOREVER;
@@ -71,6 +72,7 @@ STATIC INLINE UINT32 OsTimeSpec2Tick(const struct timespec *tp)
     return (UINT32)tick;
 }
 
+//从tick换算成秒和纳秒的结构体
 STATIC INLINE VOID OsTick2TimeSpec(struct timespec *tp, UINT32 tick)
 {
     UINT64 ns = ((UINT64)tick * OS_SYS_NS_PER_SECOND) / LOSCFG_BASE_CORE_TICK_PER_SECOND;

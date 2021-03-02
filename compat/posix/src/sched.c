@@ -41,6 +41,7 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//获取最低优先级
 int sched_get_priority_min(int policy)
 {
     if (policy != SCHED_RR) {
@@ -51,6 +52,7 @@ int sched_get_priority_min(int policy)
     return OS_TASK_PRIORITY_HIGHEST;
 }
 
+//获取最高优先级
 int sched_get_priority_max(int policy)
 {
     if (policy != SCHED_RR) {
@@ -64,6 +66,7 @@ int sched_get_priority_max(int policy)
 /*
  * This API is Linux-specific, not conforming to POSIX.
  */
+ //设置调度亲和性，即那些CPU可以调度本线程
 int sched_setaffinity(pid_t pid, size_t set_size, const cpu_set_t* set)
 {
 #if (LOSCFG_KERNEL_SMP == YES)
@@ -96,6 +99,7 @@ int sched_setaffinity(pid_t pid, size_t set_size, const cpu_set_t* set)
 /*
  * This API is Linux-specific, not conforming to POSIX.
  */
+ //获取CPU亲和性
 int sched_getaffinity(pid_t pid, size_t set_size, cpu_set_t* set)
 {
 #if (LOSCFG_KERNEL_SMP == YES)
@@ -127,6 +131,7 @@ int sched_getaffinity(pid_t pid, size_t set_size, cpu_set_t* set)
     return 0;
 }
 
+//有多少CPU可以调度某线程
 int __sched_cpucount(size_t set_size, const cpu_set_t* set)
 {
     INT32 count = 0;

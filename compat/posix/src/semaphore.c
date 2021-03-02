@@ -41,27 +41,29 @@ extern "C" {
 #endif /* __cplusplus */
 
 /* Initialize semaphore to value, shared is not supported in Huawei LiteOS. */
+//初始化信号量，数值为value
 int sem_init(sem_t *sem, int shared, unsigned int value)
 {
     UINT32 semHandle = 0;
     UINT32 ret;
 
-    (VOID)shared;
+    (VOID)shared; //共享信号量当前不支持
     if ((sem == NULL) || (value > OS_SEM_COUNT_MAX)) {
         errno = EINVAL;
         return -1;
     }
 
-    ret = LOS_SemCreate(value, &semHandle);
+    ret = LOS_SemCreate(value, &semHandle);  //使用liteos的信号量
     if (map_errno(ret) != ENOERR) {
         return -1;
     }
 
-    sem->sem = GET_SEM(semHandle);
+    sem->sem = GET_SEM(semHandle);  //记录liteos信号量控制块
 
     return 0;
 }
 
+//删除信号量
 int sem_destroy(sem_t *sem)
 {
     UINT32 ret;
@@ -71,7 +73,7 @@ int sem_destroy(sem_t *sem)
         return -1;
     }
 
-    ret = LOS_SemDelete(sem->sem->semID);
+    ret = LOS_SemDelete(sem->sem->semID); //删除liteos信号量
     if (map_errno(ret) != ENOERR) {
         return -1;
     }
@@ -79,6 +81,7 @@ int sem_destroy(sem_t *sem)
 }
 
 /* Decrement value if >0 or wait for a post. */
+//等待一个信号量，如果信号量存在，则直接使用，否则等待
 int sem_wait(sem_t *sem)
 {
     UINT32 ret;
@@ -88,7 +91,8 @@ int sem_wait(sem_t *sem)
         return -1;
     }
 
-    ret = LOS_SemPend(sem->sem->semID, LOS_WAIT_FOREVER);
+	//在liteos信号量上等待，信号量为0时则一直等待，>0时减1返回
+    ret = LOS_SemPend(sem->sem->semID, LOS_WAIT_FOREVER); 
     if (map_errno(ret) == ENOERR) {
         return 0;
     } else {
@@ -97,6 +101,7 @@ int sem_wait(sem_t *sem)
 }
 
 /* Decrement value if >0, return -1 if not. */
+//尝试获取信号量
 int sem_trywait(sem_t *sem)
 {
     UINT32 ret;
@@ -106,17 +111,19 @@ int sem_trywait(sem_t *sem)
         return -1;
     }
 
-    ret = LOS_SemPend(sem->sem->semID, LOS_NO_WAIT);
+	//>0时，减1返回，
+    ret = LOS_SemPend(sem->sem->semID, LOS_NO_WAIT); 
     if (map_errno(ret) == ENOERR) {
         return 0;
     } else {
         if ((errno != EINVAL) || (ret == LOS_ERRNO_SEM_UNAVAILABLE)) {
-            errno = EAGAIN;
+            errno = EAGAIN; //=0时，返回LOS_ERRNO_SEM_UNAVAILABLE
         }
         return -1;
     }
 }
 
+//尝试等待一个信号，超时则退出等待
 int sem_timedwait(sem_t *sem, const struct timespec *timeout)
 {
     UINT32 ret;
@@ -132,8 +139,8 @@ int sem_timedwait(sem_t *sem, const struct timespec *timeout)
         return -1;
     }
 
-    tickCnt = OsTimeSpec2Tick(timeout);
-    ret = LOS_SemPend(sem->sem->semID, tickCnt);
+    tickCnt = OsTimeSpec2Tick(timeout); //换算成tick
+    ret = LOS_SemPend(sem->sem->semID, tickCnt); //liteos的超时等待
     if (map_errno(ret) == ENOERR) {
         return 0;
     } else {
@@ -141,6 +148,7 @@ int sem_timedwait(sem_t *sem, const struct timespec *timeout)
     }
 }
 
+//释放信号量，唤醒其它等待的任务，或者增加信号量数值
 int sem_post(sem_t *sem)
 {
     UINT32 ret;
@@ -158,6 +166,7 @@ int sem_post(sem_t *sem)
     return 0;
 }
 
+//获取信号量数值
 int sem_getvalue(sem_t *sem, int *currVal)
 {
     INT32 val;
@@ -175,6 +184,7 @@ int sem_getvalue(sem_t *sem, int *currVal)
     return 0;
 }
 
+//打开或者创建信号量
 sem_t *sem_open(const char *name, int openFlag, ...)
 {
     (VOID)name;
@@ -183,6 +193,7 @@ sem_t *sem_open(const char *name, int openFlag, ...)
     return NULL;
 }
 
+//关闭信号量
 int sem_close(sem_t *sem)
 {
     (VOID)sem;
@@ -190,6 +201,7 @@ int sem_close(sem_t *sem)
     return -1;
 }
 
+//删除信号量
 int sem_unlink(const char *name)
 {
     (VOID)name;

@@ -54,6 +54,7 @@ extern "C" {
     case (name):                    \
         return (val)
 
+//获取系统名称版本等信息，即uname命令的处理函数
 int uname(struct utsname *name)
 {
     INT32 ret;
@@ -72,6 +73,7 @@ int uname(struct utsname *name)
     return 0;
 }
 
+//获取一些系统配置参数
 long sysconf(int name)
 {
     switch (name) {
@@ -140,6 +142,7 @@ long sysconf(int name)
     }
 }
 
+//获取进程ID
 pid_t getpid(void)
 {
     return ((LosTaskCB *)(OsCurrTaskGet()))->taskID;

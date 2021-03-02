@@ -49,13 +49,21 @@ extern "C" {
  * Thread control data structure
  * Per-thread information needed by POSIX
  */
+ //线程私有数据
 typedef struct {
+	//当前线程的属性
     pthread_attr_t      attr; /* Current thread attributes */
+	//当前线程的ID
     pthread_t           id; /* My thread ID */
+	//当前线程的控制块
     LosTaskCB           *task; /* pointer to Huawei LiteOS thread object */
+	//线程的名称
     CHAR                name[PTHREAD_DATA_NAME_MAX]; /* name string for debugging */
+	//线程的状态
     UINT8               state; /* Thread state */
+	//线程退出时的状态
     UINT8               cancelstate; /* Cancel state of thread */
+	//线程退出的原因(类型)
     volatile UINT8      canceltype; /* Cancel type of thread */
     volatile UINT8      canceled; /* pending cancel flag */
     struct pthread_cleanup_buffer *cancelbuffer; /* stack of cleanup buffers */

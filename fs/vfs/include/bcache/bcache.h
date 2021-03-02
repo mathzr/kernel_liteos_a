@@ -48,17 +48,29 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//按DMA要求对齐
 #define ALIGN_LIB(x)          (((x) + (HALARC_ALIGNMENT - 1)) & ~(HALARC_ALIGNMENT - 1))
+//按DMA要求对齐
 #define ALIGN_DISP(x)         (HALARC_ALIGNMENT - ((x) & (HALARC_ALIGNMENT - 1)))
+//块缓存预读线程优先级
 #define BCACHE_PREREAD_PRIO   12
+//unsigned int含有32位
 #define UNSIGNED_INTEGER_BITS 32
+//最多做31位移位操作
 #define UNINT_MAX_SHIFT_BITS  31
+//2的5次幂为32
 #define UNINT_LOG2_SHIFT      5
+//每次预读2个块缓存
 #define PREREAD_BLOCK_NUM     2
+//奇偶判断
 #define EVEN_JUDGED           2
+//用于计算百分比
 #define PERCENTAGE            100
+
+//预读事件掩码
 #define PREREAD_EVENT_MASK    0xf
 
+//位图数组尺寸，每个扇区使用一位
 #if CONFIG_FS_FAT_SECTOR_PER_BLOCK < UNSIGNED_INTEGER_BITS
 #error cache too small
 #else
@@ -66,17 +78,29 @@ extern "C" {
 #endif
 
 typedef struct {
+	//将块串联起来的链表，在空闲链表中或者在已使用链表中
     LOS_DL_LIST listNode;   /* list node */
+	//以num升序排列的链表
     LOS_DL_LIST numNode;    /* num node */
+	//以num升序排列的红黑树
     struct rb_node rbNode;  /* red-black tree node */
+	//缓存块的序号，对应磁盘块序号
     UINT64 num;             /* block number */
+	//位图数组，每个扇区占1位
     UINT32 flag[BCACHE_BLOCK_FLAGS];
+	//成功预读以后，置上标志
     UINT32 pgHit;
+	//块缓存对应的数据区
     UINT8 *data;            /* block data */
+	//此缓存块的数据是否发生了修订，需要写入磁盘
     BOOL modified;          /* is this block data modified (needs write) */
+	//此缓存块中是否已是磁盘中读入的数据
     BOOL readFlag;          /* is the block data have read from sd(real data) */
+	//读缓存还是读写缓存
     BOOL readBuff;          /* read write buffer */
+	//空闲状态还是已使用状态
     BOOL used;              /* used or free for write buf */
+	//整个缓存块数据是否都是脏数据
     BOOL allDirty;          /* the whole block is dirty */
 } OsBcacheBlock;
 
@@ -95,33 +119,59 @@ struct tagOsBcache;
 typedef VOID (*BcachePrereadFun)(struct tagOsBcache *,   /* block cache instance space holder */
                                  const OsBcacheBlock *); /* block data */
 
+//块缓存子系统控制管理结构
 typedef struct tagOsBcache {
+	//私有数据
     VOID *priv;                   /* private data */
+	//缓存块链表头部
     LOS_DL_LIST listHead;         /* head of block list */
+	//以缓存块num排序的链表头部
     LOS_DL_LIST numHead;          /* block num list */
+	//缓存块所在的红黑树的树根
     struct rb_root rbRoot;        /* block red-black tree root */
+	//每个缓存块的尺寸
     UINT32 blockSize;             /* block size in bytes */
+	//尺寸对应的2为底的对数
     UINT32 blockSizeLog2;         /* block size log2 */
+	//本磁盘下缓存块的数目
     UINT64 blockCount;            /* block count of the disk */
+	//扇区尺寸
     UINT32 sectorSize;            /* device sector size in bytes */
+	//每一个块中含有的扇区数目
     UINT32 sectorPerBlock;        /* sector count per block */
+	//本磁盘所有缓存块头部以及数据所在的内存的起始地址
     UINT8 *memStart;              /* memory base */
+	//数据预读线程的ID
     UINT32 prereadTaskId;         /* preread task id */
+	//当前正在预读的块的编号
     UINT64 curBlockNum;           /* current preread block number */
+	//空闲块的链表头部
     LOS_DL_LIST freeListHead;     /* list of free blocks */
+	//块读取函数
     BcacheReadFun breadFun;       /* block read function */
+	//块写入函数
     BcacheWriteFun bwriteFun;     /* block write function */
+	//块预读函数
     BcachePrereadFun prereadFun;  /* block preread function */
+	//针对一个块的读写缓冲区
     UINT8 *rwBuffer;              /* buffer for bcache block */
+	//块缓存数据保护的子系统
     pthread_mutex_t bcacheMutex;  /* mutex for bcache */
+	//用于唤醒预读线程的事件
     EVENT_CB_S bcacheEvent;       /* event for bcache */
+	//数据已被修改的缓存块数目，这些缓存块需要写磁盘
     UINT32 modifiedBlock;         /* number of modified blocks */
 #ifdef LOSCFG_FS_FAT_CACHE_SYNC_THREAD
+	//脏数据同步线程ID
     UINT32 syncTaskId;            /* sync task id */
 #endif
+	//起始缓存块
     OsBcacheBlock *wStart;        /* write start block */
+	//结束缓存块
     OsBcacheBlock *wEnd;          /* write end block */
+	//所有缓存块的序号和
     UINT64 sumNum;                /* block num sum val */
+	//当前缓存块总数
     UINT32 nBlock;                /* current block count */
 } OsBcache;
 

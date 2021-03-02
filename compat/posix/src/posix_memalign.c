@@ -38,18 +38,20 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//有对齐要求的内存申请
 int posix_memalign(void **memAddr, size_t alignment, size_t size)
 {
     if ((alignment == 0) || ((alignment & (alignment - 1)) != 0) || ((alignment % sizeof(void *)) != 0)) {
         return EINVAL;
     }
 
+	//申请的内存块记录在*memAddr中
     *memAddr = LOS_MemAllocAlign(OS_SYS_MEM_ADDR, size, alignment);
     if (*memAddr == NULL) {
-        return ENOMEM;
+        return ENOMEM; //内存申请失败
     }
 
-    return ENOERR;
+    return ENOERR; //内存申请成功
 }
 
 #ifdef __cplusplus

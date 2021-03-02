@@ -38,8 +38,10 @@
 
 #if !LWIP_COMPAT_SOCKETS
 
+//空指针错误处理
 #define CHECK_NULL_PTR(ptr) do { if (ptr == NULL) { set_errno(EFAULT); return -1; } } while (0)
 
+//socket相关接口适配，内部直接调用light weight ip 协议栈相关接口
 int accept(int s, struct sockaddr *addr, socklen_t *addrlen)
 {
     return lwip_accept(s, addr, addrlen);

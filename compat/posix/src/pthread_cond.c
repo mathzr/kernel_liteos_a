@@ -42,6 +42,8 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//posix thread条件变量相关的处理逻辑
+
 #define BROADCAST_EVENT     1
 #define COND_COUNTER_STEP   0x0004U
 #define COND_FLAGS_MASK     0x0003U

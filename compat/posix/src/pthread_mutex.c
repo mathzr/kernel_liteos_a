@@ -36,7 +36,9 @@
 extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
+//线程互斥锁
 
+//初始化互斥锁的属性
 int pthread_mutexattr_init(pthread_mutexattr_t *attr)
 {
     unsigned int ret = LOS_MuxAttrInit(attr);
@@ -55,51 +57,61 @@ int pthread_mutexattr_init(pthread_mutexattr_t *attr)
     return LOS_OK;
 }
 
+//释放互斥锁属性
 int pthread_mutexattr_destroy(pthread_mutexattr_t *attr)
 {
     return LOS_MuxAttrDestroy(attr);
 }
 
+//设置协议
 int pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr, int protocol)
 {
     return LOS_MuxAttrSetProtocol(attr, protocol);
 }
 
+//获取协议
 int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *attr, int *protocol)
 {
     return LOS_MuxAttrGetProtocol(attr, protocol);
 }
 
+//设置优先级
 int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *attr, int prioceiling)
 {
     return LOS_MuxAttrSetPrioceiling(attr, prioceiling);
 }
 
+//获取优先级
 int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *attr, int *prioceiling)
 {
     return LOS_MuxAttrGetPrioceiling(attr, prioceiling);
 }
 
+//设置优先级
 int pthread_mutex_setprioceiling(pthread_mutex_t *mutex, int prioceiling, int *oldPrioceiling)
 {
     return LOS_MuxSetPrioceiling(mutex, prioceiling, oldPrioceiling);
 }
 
+//获取优先级
 int pthread_mutex_getprioceiling(const pthread_mutex_t *mutex, int *prioceiling)
 {
     return LOS_MuxGetPrioceiling(mutex, prioceiling);
 }
 
+//获取类型
 int pthread_mutexattr_gettype(const pthread_mutexattr_t *attr, int *outType)
 {
     return LOS_MuxAttrGetType(attr, outType);
 }
 
+//设置类型
 int pthread_mutexattr_settype(pthread_mutexattr_t *attr, int type)
 {
     return LOS_MuxAttrSetType(attr, type);
 }
 
+//初始化互斥锁
 /* Initialize mutex. If mutexAttr is NULL, use default attributes. */
 int pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *mutexAttr)
 {
@@ -118,22 +130,26 @@ int pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *mutexA
     return (int)ret;
 }
 
+//删除互斥锁
 int pthread_mutex_destroy(pthread_mutex_t *mutex)
 {
     return LOS_MuxDestroy(mutex);
 }
 
+//上锁
 /* Lock mutex, waiting for it if necessary. */
 int pthread_mutex_lock(pthread_mutex_t *mutex)
 {
     return LOS_MuxLock(mutex, LOS_WAIT_FOREVER);
 }
 
+//尝试上锁
 int pthread_mutex_trylock(pthread_mutex_t *mutex)
 {
     return LOS_MuxTrylock(mutex);
 }
 
+//解锁
 int pthread_mutex_unlock(pthread_mutex_t *mutex)
 {
     return LOS_MuxUnlock(mutex);

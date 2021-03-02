@@ -38,6 +38,8 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//posix thread属性管理相关的代码
+
 int pthread_attr_init(pthread_attr_t *attr)
 {
     if (attr == NULL) {

@@ -56,13 +56,13 @@ extern "C" {
  * @ingroup mqueue
  * Maximum number of messages in a message queue
  */
-#define MQ_MAX_MSG_NUM    16
+#define MQ_MAX_MSG_NUM    16  //消息队列中的最多消息数目
 
 /**
  * @ingroup mqueue
  * Maximum size of a single message in a message queue
  */
-#define MQ_MAX_MSG_LEN    64
+#define MQ_MAX_MSG_LEN    64  //每个消息的最大尺寸
 
 
 /* CONSTANTS */
@@ -145,6 +145,7 @@ typedef UINTPTR   mqd_t;
  * <ul><li>mqueue.h</li></ul>
  * @see mq_close
  */
+ //打开或者创建一个消息队列
 extern mqd_t mq_open(const char *mqName, int openFlag, ...);
 
 /**
@@ -174,6 +175,7 @@ extern mqd_t mq_open(const char *mqName, int openFlag, ...);
  * <ul><li>mqueue.h</li></ul>
  * @see mq_open
  */
+ //关闭消息队列
 extern int mq_close(mqd_t personal);
 
 /**
@@ -205,6 +207,7 @@ extern int mq_close(mqd_t personal);
  * <ul><li>mqueue.h</li></ul>
  * @see mq_close
  */
+ //删除消息队列
 extern int mq_unlink(const char *mqName);
 
 /**
@@ -245,6 +248,7 @@ extern int mq_unlink(const char *mqName);
  * <ul><li>mqueue.h</li></ul>
  * @see mq_receive
  */
+ //向消息队列发送消息
 extern int mq_send(mqd_t personal, const char *msg, size_t msgLen, unsigned int msgPrio);
 
 /**
@@ -282,6 +286,7 @@ extern int mq_send(mqd_t personal, const char *msg, size_t msgLen, unsigned int 
  * <ul><li>mqueue.h</li></ul>
  * @see mq_send
  */
+ //从消息队列接收消息
 extern ssize_t mq_receive(mqd_t personal, char *msg, size_t msgLen, unsigned int *msgPrio);
 
 /**

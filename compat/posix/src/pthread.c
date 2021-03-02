@@ -47,12 +47,14 @@ extern "C" {
  * Array of pthread control structures. A pthread_t object is
  * "just" an index into this array.
  */
+ //与posix兼容的线程控制块
 STATIC _pthread_data g_pthreadData[LOSCFG_BASE_CORE_TSK_LIMIT + 1];
 
 /* Count of number of threads that have exited and not been reaped. */
-STATIC INT32 g_pthreadsExited = 0;
+STATIC INT32 g_pthreadsExited = 0;  //已经退出但还未被回收的线程
 
 /* this is to protect the pthread data */
+//针对g_pthreadData访问的互斥锁
 STATIC pthread_mutex_t g_pthreadsDataMutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* pointed to by PTHREAD_CANCELED */
@@ -62,14 +64,17 @@ UINTPTR g_pthreadCanceledDummyVar;
  * Private version of pthread_self() that returns a pointer to our internal
  * control structure.
  */
+ //获取当前线程的线程私有数据
 _pthread_data *pthread_get_self_data(void)
 {
+	//当前正在运行线程的ID
     UINT32 runningTaskPID = ((LosTaskCB *)(OsCurrTaskGet()))->taskID;
-    _pthread_data *data = &g_pthreadData[runningTaskPID];
+    _pthread_data *data = &g_pthreadData[runningTaskPID]; //获取私有数据
 
     return data;
 }
 
+//获取指定ID的线程数据
 _pthread_data *pthread_get_data(pthread_t id)
 {
     _pthread_data *data = NULL;
@@ -81,12 +86,12 @@ _pthread_data *pthread_get_data(pthread_t id)
     data = &g_pthreadData[id];
     /* Check that this is a valid entry */
     if ((data->state == PTHREAD_STATE_FREE) || (data->state == PTHREAD_STATE_EXITED)) {
-        return NULL;
+        return NULL; //线程不存在，或者线程已退出
     }
 
     /* Check that the entry matches the id */
     if (data->id != id) {
-        return NULL;
+        return NULL; //线程ID不一致
     }
 
     /* Return the pointer */
@@ -103,11 +108,12 @@ STATIC INT32 CheckForCancel(VOID)
 {
     _pthread_data *self = pthread_get_self_data();
     if (self->canceled && (self->cancelstate == PTHREAD_CANCEL_ENABLE)) {
-        return 1;
+        return 1; //其它线程让我停止运行，我也允许其它线程这么做
     }
     return 0;
 }
 
+//清除已退出线程的数据
 STATIC VOID ProcessUnusedStatusTask(_pthread_data *data)
 {
     data->state = PTHREAD_STATE_FREE;
@@ -119,6 +125,7 @@ STATIC VOID ProcessUnusedStatusTask(_pthread_data *data)
  * exited. This work must be done from a thread other than the one exiting.
  * Note: this function must be called with pthread_mutex locked.
  */
+ //回收处于退出状态的线程，由其它线程来处理这些处于退出状态的线程
 STATIC VOID PthreadReap(VOID)
 {
     UINT32 i;
@@ -128,19 +135,22 @@ STATIC VOID PthreadReap(VOID)
      * g_pthreadsExited counter springs us out of this once we have
      * found them all (and keeps us out if there are none to do).
      */
+     //遍历所有线程，寻找已退出线程
     for (i = 0; g_pthreadsExited && (i < g_taskMaxNum); i++) {
         data = &g_pthreadData[i];
         if (data->state == PTHREAD_STATE_EXITED) {
             /* the Huawei LiteOS not delete the dead TCB,so need to delete the TCB */
+			//找到需要回收的线程，通知底层回收
             (VOID)LOS_TaskDelete(data->task->taskID);
             if (data->task->taskStatus & OS_TASK_STATUS_UNUSED) {
-                ProcessUnusedStatusTask(data);
-                g_pthreadsExited--;
+                ProcessUnusedStatusTask(data); //清除私有数据
+                g_pthreadsExited--; //待回收线程数减少
             }
         }
     }
 }
 
+//设置线程的属性
 STATIC VOID SetPthreadAttr(const _pthread_data *self, const pthread_attr_t *attr, pthread_attr_t *outAttr)
 {
     /*
@@ -148,7 +158,7 @@ STATIC VOID SetPthreadAttr(const _pthread_data *self, const pthread_attr_t *attr
      * actually use. Either those passed in, or the default set.
      */
     if (attr == NULL) {
-        (VOID)pthread_attr_init(outAttr);
+        (VOID)pthread_attr_init(outAttr); //如果没有指定属性，则全部使用默认值
     } else {
         (VOID)memcpy_s(outAttr, sizeof(pthread_attr_t), attr, sizeof(pthread_attr_t));
     }
@@ -158,12 +168,15 @@ STATIC VOID SetPthreadAttr(const _pthread_data *self, const pthread_attr_t *attr
      * least PTHREAD_STACK_MIN bytes.
      */
     if (!outAttr->stacksize_set) {
+		//用户没有指定栈尺寸，则使用默认尺寸
         outAttr->stacksize = LOSCFG_BASE_CORE_TSK_DEFAULT_STACK_SIZE;
     }
     if (outAttr->inheritsched == PTHREAD_INHERIT_SCHED) {
         if (self->task == NULL) {
+			//没有指定参考的任务，则使用当前任务的优先级
             outAttr->schedparam.sched_priority = ((LosTaskCB *)(OsCurrTaskGet()))->priority;
         } else {
+        	//继承参考任务的相关属性
             outAttr->schedpolicy = self->attr.schedpolicy;
             outAttr->schedparam  = self->attr.schedparam;
             outAttr->scope       = self->attr.scope;
@@ -171,6 +184,7 @@ STATIC VOID SetPthreadAttr(const _pthread_data *self, const pthread_attr_t *attr
     }
 }
 
+//设置线程的数据属性
 STATIC VOID SetPthreadDataAttr(const pthread_attr_t *userAttr, const pthread_t threadID,
                                LosTaskCB *taskCB, _pthread_data *created)
 {
