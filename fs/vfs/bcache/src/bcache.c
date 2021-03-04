@@ -746,8 +746,9 @@ static INT32 BcacheGetBlock(OsBcache *bc, UINT64 num, BOOL readData, OsBcacheBlo
         *dblock = block;  //记录查找到的缓存块
 
         if ((bc->prereadFun != NULL) && (readData == TRUE) && (block->pgHit == 1)) {
-            block->pgHit = 0;  //存在预读函数，本次缓存块是用来辅助读操作，本缓存块的前一轮
-            //预读已完成，则本次也需要预读
+			//存在预读函数，本次缓存块是用来辅助读操作，本缓存块的前一轮
+            block->pgHit = 0;  
+            //已用完预读的缓存块，继续预读
             bc->prereadFun(bc, block);
         }
 
@@ -786,6 +787,8 @@ static INT32 BcacheGetBlock(OsBcache *bc, UINT64 num, BOOL readData, OsBcacheBlo
     return ENOERR;
 }
 
+
+//初始化块缓存子系统
 static INT32 BcacheInitCache(OsBcache *bc,
                              UINT8 *memStart,
                              UINT32 memSize,
@@ -796,50 +799,55 @@ static INT32 BcacheInitCache(OsBcache *bc,
     OsBcacheBlock *block = NULL;
     UINT32 blockNum, i;
 
-    LOS_ListInit(&bc->listHead);
-    LOS_ListInit(&bc->numHead);
-    bc->sumNum = 0;
-    bc->nBlock = 0;
+    LOS_ListInit(&bc->listHead);  //初始化LRU链表
+    LOS_ListInit(&bc->numHead);  //初始化序号排列的缓存表
+    bc->sumNum = 0;  //正在使用的缓存块序号之和
+    bc->nBlock = 0;  //正在使用的缓存块数目
 
     if (!GetValLog2(blockSize)) {
         PRINT_ERR("GetValLog2(%u) return 0.\n", blockSize);
-        return -EINVAL;
+        return -EINVAL; //缓存块尺寸不合理
     }
 
-    bc->rbRoot.rb_node = NULL;
-    bc->memStart = memStart;
-    bc->blockSize = blockSize;
-    bc->blockSizeLog2 = GetValLog2(blockSize);
-    bc->modifiedBlock = 0;
+    bc->rbRoot.rb_node = NULL;  //红黑树开始时为空
+    bc->memStart = memStart;    //块缓存子系统存储区首地址
+    bc->blockSize = blockSize;  //每个块缓存的尺寸
+    bc->blockSizeLog2 = GetValLog2(blockSize); //块缓存尺寸的对数(2为底)
+    bc->modifiedBlock = 0;      //数据发生了变化，还没有写磁盘的缓存块数目
 
     /* init block memory pool */
-    LOS_ListInit(&bc->freeListHead);
+    LOS_ListInit(&bc->freeListHead); //空闲缓存块链表
 
+	//缓存块容量为缓存区总容量除以每个缓存块占用量(头部+数据部分)
+	//缓存块数据区首地址需要按DMA对齐要求，所有也要考虑
     blockNum = (memSize - DMA_ALLGN) / (sizeof(OsBcacheBlock) + bc->blockSize);
-    blockMem = bc->memStart;
-    dataMem = blockMem + (sizeof(OsBcacheBlock) * blockNum);
-    dataMem += ALIGN_DISP((UINTPTR)dataMem);
+    blockMem = bc->memStart;  //缓存区起始地址
+    dataMem = blockMem + (sizeof(OsBcacheBlock) * blockNum); //先存储所有的缓存块头
+    dataMem += ALIGN_DISP((UINTPTR)dataMem); //然后存储所有的缓存块数据， 按DMA要求对齐
 
     for (i = 0; i < blockNum; i++) {
+		//初始化每个缓存块头部
         block = (OsBcacheBlock *)(VOID *)blockMem;
-        block->data = dataMem;
+        block->data = dataMem;  //绑定相应的数据区
+        //fatfs最开始几个数据块只用来做读操作
         block->readBuff = (i < CONFIG_FS_FAT_READ_NUMS) ? TRUE : FALSE;
 
         if (i == CONFIG_FS_FAT_READ_NUMS) {
-            bc->wStart = block;
+            bc->wStart = block;  //写操作的起始块
         }
 
-        LOS_ListAdd(&bc->freeListHead, &block->listNode);
+        LOS_ListAdd(&bc->freeListHead, &block->listNode);  //每个块缓存初始时都是空闲的
 
-        blockMem += sizeof(OsBcacheBlock);
-        dataMem += bc->blockSize;
+        blockMem += sizeof(OsBcacheBlock);  //下一个缓存块头部
+        dataMem += bc->blockSize; //下一个缓存块数据区
     }
 
-    bc->wEnd = block;
+    bc->wEnd = block;   //最后一个缓存块之后
 
     return ENOERR;
 }
 
+//从磁盘读出数据
 static INT32 DrvBread(struct inode *priv, UINT8 *buf, UINT32 len, UINT64 pos)
 {
     INT32 ret = priv->u.i_bops->read(priv, buf, pos, len);
@@ -850,6 +858,7 @@ static INT32 DrvBread(struct inode *priv, UINT8 *buf, UINT32 len, UINT64 pos)
     return ENOERR;
 }
 
+//将数据写入磁盘
 static INT32 DrvBwrite(struct inode *priv, const UINT8 *buf, UINT32 len, UINT64 pos)
 {
     INT32 ret = priv->u.i_bops->write(priv, buf, pos, len);
@@ -860,6 +869,7 @@ static INT32 DrvBwrite(struct inode *priv, const UINT8 *buf, UINT32 len, UINT64 
     return ENOERR;
 }
 
+//创建块缓存驱动
 INT32 BlockCacheDrvCreate(VOID *handle,
                           UINT8 *memStart,
                           UINT32 memSize,
@@ -867,23 +877,27 @@ INT32 BlockCacheDrvCreate(VOID *handle,
                           OsBcache *bc)
 {
     INT32 ret;
-    bc->priv = handle;
-    bc->breadFun = DrvBread;
-    bc->bwriteFun = DrvBwrite;
+    bc->priv = handle;  //此缓存系统对应的设备文件
+    bc->breadFun = DrvBread; //磁盘读取函数
+    bc->bwriteFun = DrvBwrite; //磁盘写入函数
 
+	//初始化块缓存内存池
     ret = BcacheInitCache(bc, memStart, memSize, blockSize);
     if (ret != ENOERR) {
         return ret;
     }
 
+	//初始化互斥锁
     if (pthread_mutex_init(&bc->bcacheMutex, NULL) != ENOERR) {
         return VFS_ERROR;
     }
-    bc->bcacheMutex.attr.type = PTHREAD_MUTEX_RECURSIVE;
+    bc->bcacheMutex.attr.type = PTHREAD_MUTEX_RECURSIVE; //可嵌套使用互斥锁
 
     return ENOERR;
 }
 
+
+//从块缓存读取数据到用户空间
 INT32 BlockCacheRead(OsBcache *bc, UINT8 *buf, UINT32 *len, UINT64 sector)
 {
     OsBcacheBlock *block = NULL;
@@ -899,11 +913,12 @@ INT32 BlockCacheRead(OsBcache *bc, UINT8 *buf, UINT32 *len, UINT64 sector)
     }
 
     size = *len;  //需要读入的字节数
-    pos = sector * bc->sectorSize; //数据源起始位置
-    num = pos >> bc->blockSizeLog2; //块缓存编号
-    pos = pos & (bc->blockSize - 1); //块内偏移
+    pos = sector * bc->sectorSize; //磁盘中读数据起始位置
+    num = pos >> bc->blockSizeLog2; //磁盘块编号
+    pos = pos & (bc->blockSize - 1); //磁盘块编号
 
     while (size > 0) { //还有数据需要读取
+    	//只能以块为单位读取数据，不能跨块读取
         if ((size + pos) > bc->blockSize) {
 			//本块最多还能读取的数据(不是最后一块)
             currentSize = bc->blockSize - (UINT32)pos;
@@ -939,7 +954,9 @@ INT32 BlockCacheRead(OsBcache *bc, UINT8 *buf, UINT32 *len, UINT64 sector)
             }
         }
 
-		//将本次读入的数据拷贝到用户空间
+		// else  如果块缓存中已经有和磁盘一致的数据，那么直接从块缓存获取数据，提升效率
+
+		//将块缓存的数据拷贝到用户空间
         if (LOS_CopyFromKernel((VOID *)tempBuf, size, (VOID *)(block->data + pos), currentSize) != EOK) {
             (VOID)pthread_mutex_unlock(&bc->bcacheMutex);
             return VFS_ERROR;
@@ -949,13 +966,15 @@ INT32 BlockCacheRead(OsBcache *bc, UINT8 *buf, UINT32 *len, UINT64 sector)
 
         tempBuf += currentSize;  //用户空间剩余存放数据位置
         size -= currentSize;     //剩余需要读入的尺寸
-        pos = 0;                 //下次从块起始位置读
+        pos = 0;                 //从第2个块缓存开始，都从块缓存开始位置读
         num++;                   //读下一个缓存块
     }
-    *len -= size;
+    *len -= size;  //记录已经读入的字节数
     return ret;
 }
 
+
+//向磁盘写入数据，先向块缓存写入数据，并标记块缓存为脏
 INT32 BlockCacheWrite(OsBcache *bc, const UINT8 *buf, UINT32 *len, UINT64 sector)
 {
     OsBcacheBlock *block = NULL;
@@ -966,62 +985,70 @@ INT32 BlockCacheWrite(OsBcache *bc, const UINT8 *buf, UINT32 *len, UINT64 sector
     UINT64 pos;
     UINT64 num;
 
-    pos = sector * bc->sectorSize;
-    num = pos >> bc->blockSizeLog2;
-    pos = pos & (bc->blockSize - 1);
+    pos = sector * bc->sectorSize;  //磁盘中写入数据的起始位置
+    num = pos >> bc->blockSizeLog2; //起始磁盘块号
+    pos = pos & (bc->blockSize - 1); //起始磁盘块内的起始偏移位置
 
     D(("bcache write len = %u pos = %llu bnum = %llu\n", *len, pos, num));
 
     while (size > 0) {
         if ((size + pos) > bc->blockSize) {
+			//每次最多向一个缓存块写入数据
             currentSize = bc->blockSize - (UINT32)pos;
         } else {
+        	//需要写入的最后一个缓存块
             currentSize = size;
         }
 
         (VOID)pthread_mutex_lock(&bc->bcacheMutex);
+		//获取用于写操作的缓存块
         ret = BcacheGetBlock(bc, num, FALSE, &block);
         if (ret != ENOERR) {
             (VOID)pthread_mutex_unlock(&bc->bcacheMutex);
             break;
         }
 
+		//将数据从用户空间拷贝到缓存块中
         if (LOS_CopyToKernel((VOID *)(block->data + pos), bc->blockSize - (UINT32)pos,
             (VOID *)tempBuf, currentSize) != EOK) {
             (VOID)pthread_mutex_unlock(&bc->bcacheMutex);
             return VFS_ERROR;
         }
         if (block->modified == FALSE) {
-            block->modified = TRUE;
-            bc->modifiedBlock++;
+            block->modified = TRUE;  //标记缓存块已写入用户数据
+            bc->modifiedBlock++;     //带写入磁盘的缓存块数目增加
         }
         if ((pos == 0) && (currentSize == bc->blockSize)) {
+			//整个缓存块都写入了数据，那么所有扇区都标记成脏
             memset_s(block->flag, sizeof(block->flag), 0xFF, sizeof(block->flag));
-            block->allDirty = TRUE;
+            block->allDirty = TRUE;  //所有扇区脏的另一种表示
         } else {
+			//标记部分扇区为脏的扇区(实际写入数据的扇区)
             BcacheSetFlag(bc, block, (UINT32)pos, currentSize);
         }
         (VOID)pthread_mutex_unlock(&bc->bcacheMutex);
 
-        tempBuf += currentSize;
-        size -= currentSize;
-        pos = 0;
-        num++;
+        tempBuf += currentSize;  //下一个缓存块数据来源
+        size -= currentSize;     //剩余需要写入的数据尺寸
+        pos = 0;                 //第2个缓存块开始，从缓存块开始位置写
+        num++;                   //下一个磁盘块
     }
-    *len -= size;
+    *len -= size;   //记录成功写入的字节数
     return ret;
 }
 
+//块缓存数据同步到磁盘
 INT32 BlockCacheSync(OsBcache *bc)
 {
     return BcacheSync(bc);
 }
 
+//向目标磁盘同步数据
 INT32 OsSdSync(INT32 id)
 {
 #ifdef LOSCFG_FS_FAT_CACHE
     INT32 ret;
-    los_disk *disk = get_disk(id);
+    los_disk *disk = get_disk(id);  //根据ID获得磁盘描述符
     if (disk == NULL) {
         return VFS_ERROR;
     }
@@ -1031,6 +1058,7 @@ INT32 OsSdSync(INT32 id)
         return VFS_ERROR;
     }
     if ((disk->disk_status == STAT_INUSED) && (disk->bcache != NULL)) {
+		//本磁盘正在使用，且具有缓存机制，那么将缓存数据同步到磁盘
         ret = BcacheSync(disk->bcache);
     } else {
         ret = VFS_ERROR;
@@ -1045,17 +1073,19 @@ INT32 OsSdSync(INT32 id)
 #endif
 }
 
+//同步数据到磁盘
 INT32 LOS_BcacheSyncByName(const CHAR *name)
 {
-    INT32 diskID = los_get_diskid_byname(name);
-    return OsSdSync(diskID);
+    INT32 diskID = los_get_diskid_byname(name); //根据磁盘名获得磁盘ID
+    return OsSdSync(diskID); //同步数据到磁盘
 }
 
+//获取磁盘块缓存系统中脏数据比率
 INT32 BcacheGetDirtyRatio(INT32 id)
 {
 #ifdef LOSCFG_FS_FAT_CACHE
     INT32 ret;
-    los_disk *disk = get_disk(id);
+    los_disk *disk = get_disk(id); //获取磁盘描述符
     if (disk == NULL) {
         return VFS_ERROR;
     }
@@ -1065,6 +1095,7 @@ INT32 BcacheGetDirtyRatio(INT32 id)
         return VFS_ERROR;
     }
     if ((disk->disk_status == STAT_INUSED) && (disk->bcache != NULL)) {
+		//计算已修订磁盘块占总磁盘块的百分比
         ret = (INT32)((disk->bcache->modifiedBlock * PERCENTAGE) / GetFatBlockNums());
     } else {
         ret = VFS_ERROR;
@@ -1079,6 +1110,7 @@ INT32 BcacheGetDirtyRatio(INT32 id)
 #endif
 }
 
+//根据磁盘名称获取脏数据块比率
 INT32 LOS_GetDirtyRatioByName(const CHAR *name)
 {
     INT32 diskID = los_get_diskid_byname(name);
@@ -1086,6 +1118,7 @@ INT32 LOS_GetDirtyRatioByName(const CHAR *name)
 }
 
 #ifdef LOSCFG_FS_FAT_CACHE_SYNC_THREAD
+//磁盘块脏数据同步线程
 static VOID BcacheSyncThread(UINT32 id)
 {
     INT32 diskID = (INT32)id;
@@ -1093,12 +1126,14 @@ static VOID BcacheSyncThread(UINT32 id)
     while (1) {
         dirtyRatio = BcacheGetDirtyRatio(diskID);
         if (dirtyRatio > (INT32)g_dirtyRatio) {
+			//当脏数据比率超过阈值时，触发同步
             (VOID)OsSdSync(diskID);
         }
-        msleep(g_syncInterval);
+        msleep(g_syncInterval);  //周期检查脏数据比率
     }
 }
 
+//脏数据同步线程创建
 VOID BcacheSyncThreadInit(OsBcache *bc, INT32 id)
 {
     UINT32 ret;
@@ -1109,7 +1144,7 @@ VOID BcacheSyncThreadInit(OsBcache *bc, INT32 id)
     appTask.uwStackSize = BCACHE_STATCK_SIZE;
     appTask.pcName = "bcache_sync_task";
     appTask.usTaskPrio = g_syncThreadPrio;
-    appTask.auwArgs[0] = (UINTPTR)id;
+    appTask.auwArgs[0] = (UINTPTR)id;  //磁盘块ID
     appTask.uwResved = LOS_TASK_STATUS_DETACHED;
     ret = LOS_TaskCreate(&bc->syncTaskId, &appTask);
     if (ret != ENOERR) {
@@ -1117,6 +1152,7 @@ VOID BcacheSyncThreadInit(OsBcache *bc, INT32 id)
     }
 }
 
+//删除脏数据同步线程
 VOID BcacheSyncThreadDeinit(const OsBcache *bc)
 {
     if (bc != NULL) {
@@ -1127,6 +1163,7 @@ VOID BcacheSyncThreadDeinit(const OsBcache *bc)
 }
 #endif
 
+//块设备缓存子系统初始化
 OsBcache *BlockCacheInit(struct inode *devNode, UINT32 sectorSize, UINT32 sectorPerBlock,
                          UINT32 blockNum, UINT64 blockCount)
 {
@@ -1140,37 +1177,45 @@ OsBcache *BlockCacheInit(struct inode *devNode, UINT32 sectorSize, UINT32 sector
         return NULL;
     }
 
-    blockSize = sectorSize * sectorPerBlock;
+    blockSize = sectorSize * sectorPerBlock;  //磁盘块和缓存块尺寸 = 扇区尺寸 * 每磁盘扇区数
     if ((((UINT64)(sizeof(OsBcacheBlock) + blockSize) * blockNum) + DMA_ALLGN) > UINT_MAX) {
+		//磁盘太大，系统不支持
         return NULL;
     }
+	//所有缓存块需要占用的空间(含头部和数据)
     memSize = ((sizeof(OsBcacheBlock) + blockSize) * blockNum) + DMA_ALLGN;
 
+	//缓存管理控制头
     bcache = (OsBcache *)zalloc(sizeof(OsBcache));
     if (bcache == NULL) {
         PRINT_ERR("bcache_init : malloc %u Bytes failed!\n", sizeof(OsBcache));
         return NULL;
     }
 
+	//设置磁盘同步处理函数
     set_sd_sync_fn(OsSdSync);
 
+	//申请所有缓存块占用的内存
     bcacheMem = (UINT8 *)zalloc(memSize);
     if (bcacheMem == NULL) {
         PRINT_ERR("bcache_init : malloc %u Bytes failed!\n", memSize);
         goto ERROR_OUT_WITH_BCACHE;
     }
 
+	//额外申请一个块缓存内存，用于向脏缓存块读入数据前临时存放数据
     rwBuffer = (UINT8 *)memalign(DMA_ALLGN, blockSize);
     if (rwBuffer == NULL) {
         PRINT_ERR("bcache_init : malloc %u Bytes failed!\n", blockSize);
         goto ERROR_OUT_WITH_MEM;
     }
 
+	//记录上述字段
     bcache->rwBuffer = rwBuffer;
     bcache->sectorSize = sectorSize;
     bcache->sectorPerBlock = sectorPerBlock;
-    bcache->blockCount = blockCount;
+    bcache->blockCount = blockCount;  //磁盘块数目
 
+	//并初始化各缓存块
     if (BlockCacheDrvCreate(blkDriver, bcacheMem, memSize, blockSize, bcache) != ENOERR) {
         goto ERROR_OUT_WITH_BUFFER;
     }
@@ -1186,18 +1231,21 @@ ERROR_OUT_WITH_BCACHE:
     return NULL;
 }
 
+//释放块缓存资源
 VOID BlockCacheDeinit(OsBcache *bcache)
 {
     if (bcache != NULL) {
         (VOID)pthread_mutex_destroy(&bcache->bcacheMutex);
-        free(bcache->memStart);
+        free(bcache->memStart);  //所有缓存块内存
         bcache->memStart = NULL;
-        free(bcache->rwBuffer);
+        free(bcache->rwBuffer);  //辅助缓存块内存
         bcache->rwBuffer = NULL;
-        free(bcache);
+        free(bcache);   //缓存管理头部
     }
 }
 
+
+//异步预读磁盘到缓存块线程
 static VOID BcacheAsyncPrereadThread(VOID *arg)
 {
     OsBcache *bc = (OsBcache *)arg;
@@ -1206,6 +1254,7 @@ static VOID BcacheAsyncPrereadThread(VOID *arg)
     UINT32 i;
 
     for (;;) {
+		//接收需要异步读的事件
         ret = (INT32)LOS_EventRead(&bc->bcacheEvent, PREREAD_EVENT_MASK,
                                    LOS_WAITMODE_OR | LOS_WAITMODE_CLR, LOS_WAIT_FOREVER);
         if (ret != ASYNC_EVENT_BIT) {
@@ -1213,12 +1262,14 @@ static VOID BcacheAsyncPrereadThread(VOID *arg)
             continue;
         }
 
+		//只处理ASYNC_EVENT_BIT事件，每次预读2个缓存块
         for (i = 1; i <= PREREAD_BLOCK_NUM; i++) {
             if ((bc->curBlockNum + i) >= bc->blockCount) {
-                break;
+                break;  //没有磁盘块可读了
             }
 
             (VOID)pthread_mutex_lock(&bc->bcacheMutex);
+			//获取缓存块，并将指定磁盘块数据读入缓存块
             ret = BcacheGetBlock(bc, bc->curBlockNum + i, TRUE, &block);
             if (ret != ENOERR) {
                 PRINT_ERR("read block %llu error : %d!\n", bc->curBlockNum, ret);
@@ -1228,11 +1279,13 @@ static VOID BcacheAsyncPrereadThread(VOID *arg)
         }
 
         if (block != NULL) {
+			//本缓存块是最后一个预读的磁盘块数据
             block->pgHit = 1; /* preread complete */
         }
     }
 }
 
+//唤醒预读线程
 VOID ResumeAsyncPreread(OsBcache *arg1, const OsBcacheBlock *arg2)
 {
     UINT32 ret;
@@ -1240,25 +1293,28 @@ VOID ResumeAsyncPreread(OsBcache *arg1, const OsBcacheBlock *arg2)
     const OsBcacheBlock *block = arg2;
 
     if (OsCurrTaskGet()->taskID != bc->prereadTaskId) {
-        bc->curBlockNum = block->num;
-        ret = LOS_EventWrite(&bc->bcacheEvent, ASYNC_EVENT_BIT);
+		//当前线程不是预读线程
+        bc->curBlockNum = block->num;  //记录当前正在读的磁盘块号
+        ret = LOS_EventWrite(&bc->bcacheEvent, ASYNC_EVENT_BIT); //然后唤醒预读线程
         if (ret != ENOERR) {
             PRINT_ERR("Write event failed in %s, %d\n", __FUNCTION__, __LINE__);
         }
     }
 }
 
+//预读模块初始化
 UINT32 BcacheAsyncPrereadInit(OsBcache *bc)
 {
     UINT32 ret;
     TSK_INIT_PARAM_S appTask;
 
-    ret = LOS_EventInit(&bc->bcacheEvent);
+    ret = LOS_EventInit(&bc->bcacheEvent);  //创建预读事件
     if (ret != ENOERR) {
         PRINT_ERR("Async event init failed in %s, %d\n", __FUNCTION__, __LINE__);
         return ret;
     }
 
+	//创建预读线程
     (VOID)memset_s(&appTask, sizeof(TSK_INIT_PARAM_S), 0, sizeof(TSK_INIT_PARAM_S));
     appTask.pfnTaskEntry = (TSK_ENTRY_FUNC)BcacheAsyncPrereadThread;
     appTask.uwStackSize = BCACHE_STATCK_SIZE;
@@ -1274,16 +1330,19 @@ UINT32 BcacheAsyncPrereadInit(OsBcache *bc)
     return ret;
 }
 
+//预读模块删除
 UINT32 BcacheAsyncPrereadDeinit(OsBcache *bc)
 {
     UINT32 ret = LOS_NOK;
 
     if (bc != NULL) {
+		//删除预读线程
         ret = LOS_TaskDelete(bc->prereadTaskId);
         if (ret != ENOERR) {
             PRINT_ERR("Bcache async task delete failed in %s, %d\n", __FUNCTION__, __LINE__);
         }
 
+		//删除预读事件
         ret = LOS_EventDestroy(&bc->bcacheEvent);
         if (ret != ENOERR) {
             PRINT_ERR("Async event destroy failed in %s, %d\n", __FUNCTION__, __LINE__);

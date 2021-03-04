@@ -173,59 +173,83 @@ typedef enum _disk_status_ {
     STAT_UNREADY
 } disk_status_e;
 
+//磁盘描述符
 typedef struct _los_disk_ {
+	//物理磁盘ID
     UINT32 disk_id : 8;     /* physics disk number */
+	//磁盘状态
     UINT32 disk_status : 2; /* status of disk */
+	//本磁盘的分区数目
     UINT32 part_count : 8;  /* current partition count */
     UINT32 reserved : 14;
+	//本磁盘对应的设备文件
     struct inode *dev;      /* device */
 #ifdef LOSCFG_FS_FAT_CACHE
+	//本磁盘对应的块缓存
     OsBcache *bcache;       /* cache of the disk, shared in all partitions */
 #endif
+	//本磁盘的扇区尺寸
     UINT32 sector_size;     /* disk sector size */
+	//本磁盘起始扇区编号
     UINT64 sector_start;    /* disk start sector */
+	//本磁盘拥有的扇区数
     UINT64 sector_count;    /* disk sector number */
-    UINT8 type;
-    CHAR *disk_name;
+    UINT8 type;  //磁盘类型  EMMC 或者 OTHER
+    CHAR *disk_name;  //磁盘名称
+    //磁盘下的扇区列表头部
     LOS_DL_LIST head;       /* link head of all the partitions */
-    struct pthread_mutex disk_mutex;
+    struct pthread_mutex disk_mutex;  //互斥访问锁
 } los_disk;
 
+
+//磁盘分区描述符
 typedef struct _los_part_ {
+	//所在的磁盘ID
     UINT32 disk_id : 8;      /* physics disk number */
+	//系统分区ID
     UINT32 part_id : 8;      /* partition number in the system */
+	//磁盘分区ID
     UINT32 part_no_disk : 8; /* partition number in the disk */
+	//主引导记录中的分区ID
     UINT32 part_no_mbr : 5;  /* partition number in the mbr */
     UINT32 reserved : 3;
+	//本分区使用的文件系统
     UINT8 filesystem_type;   /* filesystem used in the partition */
-    UINT8 type;
+    UINT8 type;  //EMMC 或者 其它
+    //本分区对应的设备文件
     struct inode *dev;      /* dev devices used in the partition */
+	//分区名称
     CHAR *part_name;
+	//本分区的起始扇区在磁盘中的偏移
     UINT64 sector_start;     /*
                               * offset of a partition to the primary devices
                               * (multi-mbr partitions are seen as same parition)
                               */
+    //本分区的扇区数                          
     UINT64 sector_count;     /*
                               * sector numbers of a partition. If there is no addpartition operation,
                               * then all the mbr devices equal to the primary device count.
                               */
-    LOS_DL_LIST list;        /* linklist of partition */
+    LOS_DL_LIST list;        /* linklist of partition */ //将分区链接起来
 } los_part;
 
+//分区信息
 struct partition_info {
-    UINT8 type;
-    UINT64 sector_start;
-    UINT64 sector_count;
+    UINT8 type;  //分区类型
+    UINT64 sector_start; //起始扇区
+    UINT64 sector_count; //扇区数
 };
 
+//磁盘分区信息
 struct disk_divide_info {
-    UINT64 sector_count;
-    UINT32 sector_size;
-    UINT32 part_count;
+    UINT64 sector_count;  //扇区数
+    UINT32 sector_size;   //扇区尺寸
+    UINT32 part_count;    //分区数
     /*
      * The primary partition place should be reversed and set to 0 in case all the partitions are
      * logical partition (maximum 16 currently). So the maximum part number should be 4 + 16.
      */
+     //主分区和逻辑分区共20个分区
     struct partition_info part[MAX_DIVIDE_PART_PER_DISK + MAX_PRIMARY_PART_PER_DISK];
 };
 

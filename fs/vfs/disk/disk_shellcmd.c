@@ -38,6 +38,7 @@
 #include "shcmd.h"
 #include "shell.h"
 
+//显示磁盘分区信息
 INT32 osShellCmdPartInfo(INT32 argc, const CHAR **argv)
 {
     struct inode *node = NULL;
@@ -56,18 +57,18 @@ INT32 osShellCmdPartInfo(INT32 argc, const CHAR **argv)
         set_errno(EINVAL);
         return -LOS_NOK;
     }
-    SETUP_SEARCH(&desc, argv[0], false);
-    ret = inode_find(&desc);
+    SETUP_SEARCH(&desc, argv[0], false);  //填写搜索文件名
+    ret = inode_find(&desc);  //查询文件索引节点
     if (ret < 0) {
         PRINT_ERR("no part found\n");
         set_errno(ENOENT);
         return -LOS_NOK;
     }
-    node = desc.node;
+    node = desc.node; //获取文件索引节点
 
-    part = los_part_find(node);
-    inode_release(node);
-    show_part(part);
+    part = los_part_find(node); //根据索引节点获取分区信息
+    inode_release(node); //释放索引节点
+    show_part(part);  //显示分区信息
 
     return LOS_OK;
 }
