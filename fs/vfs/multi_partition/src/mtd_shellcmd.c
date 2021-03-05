@@ -41,7 +41,7 @@
 #if defined(LOSCFG_FS_JFFS)
 extern partition_param *g_spinorPartParam;
 #endif
-
+//JFFS文件系统的分区信息显示输出
 INT32 osShellCmdPartitionShow(INT32 argc, const CHAR **argv)
 {
 #if defined(LOSCFG_FS_JFFS)
@@ -59,7 +59,7 @@ INT32 osShellCmdPartitionShow(INT32 argc, const CHAR **argv)
 
 #if defined(LOSCFG_FS_JFFS)
     if (strcmp(fs, "spinor") == 0) {
-        param = g_spinorPartParam;
+        param = g_spinorPartParam;  //当前只支持 spinor
     } else
 #endif
     {
@@ -73,6 +73,8 @@ INT32 osShellCmdPartitionShow(INT32 argc, const CHAR **argv)
         return -EINVAL;
     }
 
+	//遍历分区信息列表
+	//输出分区信息
     LOS_DL_LIST_FOR_EACH_ENTRY(node, &param->partition_head->node_info, mtd_partition, node_info) {
         PRINTK("%s partition num:%u, blkdev name:%s, mountpt:%s, startaddr:0x%08x, length:0x%08x\n",
             fs, node->patitionnum, node->blockdriver_name, node->mountpoint_name,

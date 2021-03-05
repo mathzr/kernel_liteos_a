@@ -52,6 +52,7 @@
 ****************************************************************************/
 
 #ifdef LOSCFG_FS_FAT_VIRTUAL_PARTITION
+//如果path是文件系统挂载点，执行其statfs方法
 int virstatfs(FAR const char *path, FAR struct statfs *buf)
 {
   FAR struct inode *inode;
@@ -74,6 +75,7 @@ int virstatfs(FAR const char *path, FAR struct statfs *buf)
       goto errout;
     }
 
+	//获取path所对应的全路径
   ret = vfs_normalize_path((const char *)NULL, path, &fullpath);
   if (ret < 0)
     {
@@ -82,7 +84,7 @@ int virstatfs(FAR const char *path, FAR struct statfs *buf)
     }
 
   /* Get an inode for this file */
-  SETUP_SEARCH(&desc, fullpath, false);
+  SETUP_SEARCH(&desc, fullpath, false);  //查找此路径对应的文件索引节点
   ret = inode_find(&desc);
   if (ret < 0)
     {
@@ -94,8 +96,8 @@ int virstatfs(FAR const char *path, FAR struct statfs *buf)
       free(fullpath);
       goto errout;
     }
-  inode = desc.node;
-  relpath = desc.relpath;
+  inode = desc.node;  //查找成功
+  relpath = desc.relpath;  //相对路径
 
   /* The way we handle the statfs depends on the type of inode that we
    * are dealing with.
@@ -108,10 +110,11 @@ int virstatfs(FAR const char *path, FAR struct statfs *buf)
       * supports the statfs() method
       */
 
+		//此目录为一个文件系统挂载点，检查是否支持statfs方法
       if (inode->u.i_mops && inode->u.i_mops->virstatfs)
         {
           /* Perform the statfs() operation */
-
+			//执行其statfs方法
           ret = inode->u.i_mops->virstatfs(inode, relpath, buf);
         }
       else

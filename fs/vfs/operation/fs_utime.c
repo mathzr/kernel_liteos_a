@@ -58,6 +58,7 @@ static int utime_pseudo(FAR struct inode *pinode, FAR const struct utimbuf *ptim
     return ENOSYS;
 }
 
+//更改文件的修改时间
 int utime(FAR const char *path, FAR const struct utimbuf *ptimes)
 {
     FAR struct inode *pinode = NULL;
@@ -80,6 +81,7 @@ int utime(FAR const char *path, FAR const struct utimbuf *ptimes)
         goto errout;
     }
 
+	//获得path对应的全路径
     ret = vfs_normalize_path((const char *)NULL, path, &fullpath);
     if (ret < 0) {
         ret = -ret;
@@ -87,14 +89,13 @@ int utime(FAR const char *path, FAR const struct utimbuf *ptimes)
     }
 
     /* Check for the fake root directory (which has no inode) */
-
     if (strcmp(fullpath, "/") == 0) {
         ret = EACCES;
-        goto errout_with_path;
+        goto errout_with_path;  //排除根目录
     }
 
     /* Get an inode for this file */
-    SETUP_SEARCH(&desc, fullpath, false);
+    SETUP_SEARCH(&desc, fullpath, false); //查询对应的文件索引节点
     ret = inode_find(&desc);
     if (ret < 0) {
         /* This name does not refer to a psudeo-inode and there is no
@@ -104,7 +105,7 @@ int utime(FAR const char *path, FAR const struct utimbuf *ptimes)
         ret = EACCES;
         goto errout_with_path;
     }
-    pinode = desc.node;
+    pinode = desc.node; //查询成功
 
     /* The way we handle the utime depends on the type of inode that we
      * are dealing with.
@@ -115,14 +116,16 @@ int utime(FAR const char *path, FAR const struct utimbuf *ptimes)
         /* The node is a file system mointpoint. Verify that the mountpoint
          * supports the utime() method.
          */
-
+		//此目录是一个文件系统挂载点
         if (pinode->u.i_mops && pinode->u.i_mops->utime) {
+			//使用文件系统对应的utime方法
             if (ptimes == NULL) {
                 /*get current seconds*/
-
-                cur_sec = time(NULL);
+                cur_sec = time(NULL);  //获取以秒为单位的时间
+                //转换成tm结构体表示的时间
                 set_tm = localtime(&cur_sec);   /* transform seconds to struct tm */
             } else {
+				//根据ptimes参数获取时间
                 set_tm = gmtime(&ptimes->modtime);   /* transform seconds to struct tm */
             }
 
@@ -132,6 +135,7 @@ int utime(FAR const char *path, FAR const struct utimbuf *ptimes)
                 ret = EINVAL;
                 goto errout_with_inode;
             }
+			//使用文件系统对应的utime方法
             ret = pinode->u.i_mops->utime(pinode, relpath, set_tm);
         } else {
             ret = ENOSYS;

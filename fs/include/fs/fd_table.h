@@ -38,15 +38,21 @@
 #include "linux/spinlock.h"
 
 /* open file table for process fd */
+//全系统的已打开文件的编号
 struct file_table_s {
     signed short sysFd; /* system fd associate with the tg_filelist index */
 };
 
+//进程的文件描述符表
 struct fd_table_s {
-    unsigned int max_fds;
+    unsigned int max_fds;  //描述符的最大数量
+    //进程描述符到系统描述符的映射
     struct file_table_s *ft_fds; /* process fd array associate with system fd */
+	//打开的文件描述符集合
     fd_set *open_fds;
-    fd_set *proc_fds;
+	//进程内文件描述符集合
+    fd_set *proc_fds; 
+	//用于互斥访问
     sem_t ft_sem; /* manage access to the file table */
 };
 

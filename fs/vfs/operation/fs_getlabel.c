@@ -93,6 +93,7 @@
  *
  ****************************************************************************/
 
+//获取FAT磁盘卷标签
 int getlabel(const char *target, char *label)
 {
     FAR struct inode *mountpt_inode = NULL;
@@ -109,7 +110,7 @@ int getlabel(const char *target, char *label)
     }
 
     /* Get a absolute path */
-
+	//获得target对应的全路径
     errcode = vfs_normalize_path((const char *)NULL, target, &fullpath);
     if (errcode < 0) {
         errcode = -errcode;
@@ -117,22 +118,23 @@ int getlabel(const char *target, char *label)
     }
 
     /* Find the mountpt */
-    SETUP_SEARCH(&desc, fullpath, false);
+    SETUP_SEARCH(&desc, fullpath, false); //查找目录
     ret = inode_find(&desc);
     if (ret < 0) {
         errcode = EACCES;
         goto errout_with_fullpath;
     }
-    mountpt_inode = desc.node;
+    mountpt_inode = desc.node;  //查找成功
 
     /* Verfy the path is a mountpoint path or file path */
 
     if (!INODE_IS_MOUNTPT(mountpt_inode) && !INODE_IS_BLOCK(mountpt_inode)) {
-        errcode = EPERM;
+        errcode = EPERM;  //不是挂载点，也不是块设备节点
         goto errout_with_release;
     }
 
     if (mountpt_inode->u.i_mops && mountpt_inode->u.i_mops->getlabel) {
+		//使用挂载的文件系统对应的getlabel方法
         status = mountpt_inode->u.i_mops->getlabel(mountpt_inode->i_private, label);
         if (status < 0) {
             /* The inode is unhappy with the blkdrvr for some reason */

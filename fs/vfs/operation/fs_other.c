@@ -54,18 +54,20 @@ extern "C" {
 
 #define MAX_DIR_ENT 1024
 
+//读取文件属性
 int fstat(int fd, struct stat *buf)
 {
     struct file *filep = NULL;
 
-    int ret = fs_getfilep(fd, &filep);
+    int ret = fs_getfilep(fd, &filep); //通过文件描述符获取文件结构体
     if (ret < 0) {
         return VFS_ERROR;
     }
 
-    return stat(filep->f_path, buf);
+    return stat(filep->f_path, buf); //获取文件属性
 }
 
+//读取文件属性 64位版本
 int fstat64(int fd, struct stat64 *buf)
 {
     struct file *filep = NULL;
@@ -83,59 +85,64 @@ int lstat(const char *path, struct stat *buffer)
     return stat(path, buffer);
 }
 
+//文件的权限检查
 int VfsPermissionCheck(uint fuid, uint fgid, mode_t fileMode, int accMode)
 {
     uint uid = OsCurrUserGet()->effUserID;
     mode_t tmpMode = fileMode;
 
     if (uid == fuid) {
-        tmpMode >>= USER_MODE_SHIFT;
+		//我是文件拥有者
+        tmpMode >>= USER_MODE_SHIFT;  //获取文件拥有者权限
     } else if (LOS_CheckInGroups(fgid)) {
-        tmpMode >>= GROUP_MODE_SHIFT;
+        tmpMode >>= GROUP_MODE_SHIFT; //我是文件所属组的成员
     }
 
-    tmpMode &= (READ_OP | WRITE_OP | EXEC_OP);
+    tmpMode &= (READ_OP | WRITE_OP | EXEC_OP); //3种权限
 
     if ((accMode & tmpMode) == accMode) {
-        return 0;
+        return 0;  //要求访问的权限与拥有的权限一致
     }
 
     tmpMode = 0;
     if (S_ISDIR(fileMode)) {
+		//目录文件
         if ((accMode & EXEC_OP) && (IsCapPermit(CAP_DAC_READ_SEARCH))) {
-            tmpMode |= EXEC_OP;
+            tmpMode |= EXEC_OP; //允许对目录进行浏览
         }
     } else {
         if ((accMode & EXEC_OP) && (IsCapPermit(CAP_DAC_EXECUTE)) && (fileMode & MODE_IXUGO)) {
+			//其它文件，申请执行权限，允许执行，文件具有可执行权限
             tmpMode |= EXEC_OP;
         }
     }
 
     if ((accMode & WRITE_OP) && IsCapPermit(CAP_DAC_WRITE)) {
-        tmpMode |= WRITE_OP;
+        tmpMode |= WRITE_OP; //写权限检查
     }
 
     if ((accMode & READ_OP) && IsCapPermit(CAP_DAC_READ_SEARCH)) {
-        tmpMode |= READ_OP;
+        tmpMode |= READ_OP; //读权限检查
     }
 
     if ((accMode & tmpMode) == accMode) {
-        return 0;
+        return 0; //权限精确匹配
     }
 
-    return 1;
+    return 1; //无权限
 }
 
 #ifdef VFS_USING_WORKDIR
+//设置当前工作路径
 int SetWorkDir(char *dir, size_t len)
 {
   errno_t ret;
   uint lock_flags;
-  LosProcessCB *curr = OsCurrProcessGet();
+  LosProcessCB *curr = OsCurrProcessGet();  //当前进程
 
   spin_lock_irqsave(&curr->files->workdir_lock, lock_flags);
-  ret = strncpy_s(curr->files->workdir, PATH_MAX, dir, len);
-  curr->files->workdir[PATH_MAX - 1] = '\0';
+  ret = strncpy_s(curr->files->workdir, PATH_MAX, dir, len);  //设置当前工作路径
+  curr->files->workdir[PATH_MAX - 1] = '\0'; //设置字符串结尾符
   spin_unlock_irqrestore(&curr->files->workdir_lock, lock_flags);
   if (ret != EOK) {
       return -1;
@@ -145,6 +152,7 @@ int SetWorkDir(char *dir, size_t len)
 }
 #endif
 
+//改变当前工作路径
 int chdir(const char *path)
 {
     int ret;
@@ -167,12 +175,14 @@ int chdir(const char *path)
         return -1;
     }
 
+	//对路径名path进行规范化处理，并返回对应的绝对路径
     ret = vfs_normalize_path((const char *)NULL, path, &fullpath);
     if (ret < 0) {
         set_errno(-ret);
         return -1; /* build path failed */
     }
     fullpath_bak = fullpath;
+	//获取路径名对应的文件属性
     ret = stat(fullpath, &statBuff);
     if (ret < 0) {
         free(fullpath_bak);
@@ -181,10 +191,11 @@ int chdir(const char *path)
 
     if (!S_ISDIR(statBuff.st_mode)) {
         set_errno(ENOTDIR);
-        free(fullpath_bak);
+        free(fullpath_bak);  //ch命令只作用于目录
         return -1;
     }
 
+	//然后检查是否有这个目录对应的执行权限
     if (VfsPermissionCheck(statBuff.st_uid, statBuff.st_gid, statBuff.st_mode, EXEC_OP)) {
         set_errno(EACCES);
         free(fullpath_bak);
@@ -192,6 +203,7 @@ int chdir(const char *path)
     }
 
 #ifdef VFS_USING_WORKDIR
+	//设置工作目录
     ret = SetWorkDir(fullpath, strlen(fullpath));
     if (ret != 0)
       {
@@ -216,14 +228,14 @@ int chdir(const char *path)
  *
  * @return the returned current directory.
  */
-
+//获取当前工作目录
 char *getcwd(char *buf, size_t n)
 {
 #ifdef VFS_USING_WORKDIR
     int ret;
     unsigned int len;
     UINTPTR lock_flags;
-    LosProcessCB *curr = OsCurrProcessGet();
+    LosProcessCB *curr = OsCurrProcessGet(); //当前进程
 #endif
     if (buf == NULL) {
         set_errno(EINVAL);
@@ -231,14 +243,14 @@ char *getcwd(char *buf, size_t n)
     }
 #ifdef VFS_USING_WORKDIR
     spin_lock_irqsave(&curr->files->workdir_lock, lock_flags);
-    len = strlen(curr->files->workdir);
+    len = strlen(curr->files->workdir); //当前工作目录字符串长度
     if (n <= len)
       {
         set_errno(ERANGE);
         spin_unlock_irqrestore(&curr->files->workdir_lock, lock_flags);
         return NULL;
       }
-    ret = memcpy_s(buf, n, curr->files->workdir, len + 1);
+    ret = memcpy_s(buf, n, curr->files->workdir, len + 1); //拷贝当前工作目录的值
     if (ret != EOK)
       {
         set_errno(ENAMETOOLONG);
@@ -253,6 +265,7 @@ char *getcwd(char *buf, size_t n)
     return buf;
 }
 
+//修改权限
 int chmod(const char *path, mode_t mode)
 {
     int result;
@@ -263,6 +276,7 @@ int chmod(const char *path, mode_t mode)
         return VFS_ERROR;
     }
 
+	//现在还不支持
     /* no access/permission control for files now, just return OK if stat is okay*/
     return OK;
 }
@@ -278,10 +292,12 @@ int access(const char *path, int amode)
         return VFS_ERROR;
     }
 
+	//暂时还未支持
     /* no access/permission control for files now, just return OK if stat is okay*/
     return OK;
 }
 
+//指定的路径是否挂载点
 bool IS_MOUNTPT(const char *dev)
 {
     struct inode *node = NULL;
@@ -299,6 +315,7 @@ bool IS_MOUNTPT(const char *dev)
     return ret;
 }
 
+//遍历指定的目录，并针对目录中的每一项进行指定的处理
 static struct dirent **scandir_get_file_list(const char *dir, int *num, int(*filter)(const struct dirent *))
 {
     DIR *od = NULL;
@@ -310,61 +327,71 @@ static struct dirent **scandir_get_file_list(const char *dir, int *num, int(*fil
     struct dirent *p = NULL;
     int err;
 
-    od = opendir(dir);
+    od = opendir(dir);  //打开目录
     if (od == NULL) {
         return NULL;
     }
 
+	//创建目录项列表，容量上限1024
     list = (struct dirent **)malloc(listSize * sizeof(struct dirent *));
     if (list == NULL) {
         (void)closedir(od);
         return NULL;
     }
 
+	//遍历目录中的目录项
     for (ent = readdir(od); ent != NULL; ent = readdir(od)) {
         if (filter && !filter(ent)) {
-            continue;
+            continue;  //跳过不需要处理的目录项
         }
 
         if (n == listSize) {
+			//如果目录项列表已用完，对目录项列表扩容
             listSize += MAX_DIR_ENT;
             newList = (struct dirent **)malloc(listSize * sizeof(struct dirent *));
             if (newList == NULL) {
                 break;
             }
 
+			//旧目录项列表内容拷贝到新列表
             err = memcpy_s(newList, listSize * sizeof(struct dirent *), list, n * sizeof(struct dirent *));
             if (err != EOK) {
                 free(newList);
                 break;
             }
-            free(list);
-            list = newList;
+            free(list); //释放旧目录项列表
+            list = newList; //更新目录项列表
         }
 
+		//添加目录项信息记录
         p = (struct dirent *)malloc(sizeof(struct dirent));
         if (p == NULL) {
             break;
         }
 
+		//保存目录项信息
         (void)memcpy_s((void *)p, sizeof(struct dirent), (void *)ent, sizeof(struct dirent));
-        list[n] = p;
+        list[n] = p;  //记录到列表中
 
-        n++;
+        n++;  //继续添加目录项
     }
 
-    if (closedir(od) < 0) {
+    if (closedir(od) < 0) { //关闭目录
+    	//如果关闭失败，则释放之前的目录项
         while (n--) {
             free(list[n]);
         }
+		//和目录项列表
         free(list);
         return NULL;
     }
 
-    *num = n;
-    return list;
+    *num = n;  //返回符合条件的目录项个数
+    return list;  //返回符合条件的目录项列表
 }
 
+//扫描目录中的目录项，找出满足条件的目录列表，
+//并对目录列表进行排序
 int scandir(const char *dir, struct dirent ***namelist,
             int(*filter)(const struct dirent *),
             int(*compar)(const struct dirent **,
@@ -377,6 +404,7 @@ int scandir(const char *dir, struct dirent ***namelist,
         return -1;
     }
 
+	//找出目录项列表
     list = scandir_get_file_list(dir, &n, filter);
     if (list == NULL) {
         return -1;
@@ -384,18 +412,21 @@ int scandir(const char *dir, struct dirent ***namelist,
 
     /* Change to return to the array size */
 
+	//备份目录项列表
     *namelist = (struct dirent **)malloc(n * sizeof(struct dirent *));
     if (*namelist == NULL && n > 0) {
-        *namelist = list;
+        *namelist = list; //备份失败，使用原表(有合法表项)
     } else if (*namelist != NULL) {
+    	//备份成功
         (void)memcpy_s(*namelist, n * sizeof(struct dirent *), list, n * sizeof(struct dirent *));
-        free(list);
+        free(list); //释放原表
     } else {
-        free(list);
+		//备份失败，无有效表项
+        free(list); //也释放原表
     }
 
     /* Sort array */
-
+	//对目录列表进行排序
     if (compar && *namelist) {
         qsort((void *)*namelist, (size_t)n, sizeof(struct dirent *), (int (*)(const void *, const void *))*compar);
     }
@@ -403,11 +434,14 @@ int scandir(const char *dir, struct dirent ***namelist,
     return n;
 }
 
+//字典序排序
 int alphasort(const struct dirent **a, const struct dirent **b)
 {
+	//按目录项名称进行比较
     return strcoll((*a)->d_name, (*b)->d_name);
 }
 
+//字符串从后往前查找字符位置
 char *rindex(const char *s, int c)
 {
     if (s == NULL) {
@@ -422,6 +456,7 @@ int (*sd_sync_fn)(int) = NULL;
 
 int (*nand_sync_fn)(void) = NULL;
 
+//设置flash数据同步函数
 void set_sd_sync_fn(int (*sync_fn)(int))
 {
     sd_sync_fn = sync_fn;
@@ -432,8 +467,8 @@ void sync(void)
 #ifdef LOSCFG_FS_FAT_CACHE
     if (sd_sync_fn != NULL)
       {
-        (void)sd_sync_fn(0);
-        (void)sd_sync_fn(1);
+        (void)sd_sync_fn(0);  //同步0号flash磁盘
+        (void)sd_sync_fn(1);  //同步1号flash磁盘
       }
 #endif
 }

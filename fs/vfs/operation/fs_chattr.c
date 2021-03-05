@@ -53,7 +53,7 @@
  *   Zero on success; -EPERM on failure:
  *
  ****************************************************************************/
-
+//普通目录的属性变更
 static int pseudo_chattr(struct inode *inode, struct IATTR *attr)
 {
     unsigned int valid;
@@ -61,39 +61,44 @@ static int pseudo_chattr(struct inode *inode, struct IATTR *attr)
     uint c_uid = OsCurrUserGet()->effUserID;
     uint c_gid = OsCurrUserGet()->effGid;
     valid = attr->attr_chg_valid;
-    inode_semtake();
+    inode_semtake(); //获得信号量
 
     tmp_mode = inode->i_mode;
     if (valid & CHG_UID) {
+		//修改用户ID, chown
         if (((c_uid != inode->i_uid) || (attr->attr_chg_uid != inode->i_uid)) && (!IsCapPermit(CAP_CHOWN))) {
-            inode_semgive();
+            inode_semgive(); //无权限执行chown
             return -EPERM;
         } else {
-            inode->i_uid = attr->attr_chg_uid;
+            inode->i_uid = attr->attr_chg_uid;  //修改用户ID
         }
     }
 
     if (valid & CHG_GID) {
+		//修改组ID
         if (((c_gid != inode->i_gid) || (attr->attr_chg_gid != inode->i_gid)) && (!IsCapPermit(CAP_CHOWN))) {
-            inode_semgive();
+            inode_semgive(); //无权限修改
             return -EPERM;
         } else {
-            inode->i_gid = attr->attr_chg_gid;
+            inode->i_gid = attr->attr_chg_gid;  //修改组ID
         }
     }
 
     if (valid & CHG_MODE) {
         if (!IsCapPermit(CAP_FOWNER) && (c_uid != inode->i_uid)) {
-            inode_semgive();
+            inode_semgive();  //无权限处理 chmod
             return -EPERM;
         } else {
+			//去除新字段文件类型
             attr->attr_chg_mode &= ~S_IFMT; /* delete file type */
+			//保留原字段的文件类型
             tmp_mode &= S_IFMT;
+			//合成原字段文件类型和新字段权限信息
             tmp_mode = attr->attr_chg_mode | tmp_mode; /* add old file type */
         }
     }
-    inode->i_mode = tmp_mode;
-    inode_semgive();
+    inode->i_mode = tmp_mode;  //保留原字段文件类型，同时修改文件权限
+    inode_semgive();  //释放信号量
     return 0;
 }
 
@@ -104,7 +109,7 @@ static int pseudo_chattr(struct inode *inode, struct IATTR *attr)
  *   Zero on success; -1 on failure with errno set:
  *
  ****************************************************************************/
-
+//修改文件属性，如权限，拥有者
 int chattr(const char *pathname, struct IATTR *attr)
 {
     struct inode *inode = NULL;
@@ -122,12 +127,14 @@ int chattr(const char *pathname, struct IATTR *attr)
         return VFS_ERROR;
     }
 
+	//获取当前工作路径的全路径
     ret = get_path_from_fd(dirfd, &relativepath); /* Get absolute path by dirfd */
     if (ret < 0) {
         error = -ret;
         goto errout;
     }
 
+	//进一步获取全路径
     ret = vfs_normalize_path((const char *)relativepath, pathname, &fullpath);
     if (relativepath) {
         free(relativepath);
@@ -138,13 +145,13 @@ int chattr(const char *pathname, struct IATTR *attr)
         goto errout;
     }
 
-    ret = stat(fullpath, &statBuff);
+    ret = stat(fullpath, &statBuff);  //获取当前属性信息
     if (ret < 0) {
         free(fullpath);
         return VFS_ERROR;
     }
 
-    SETUP_SEARCH(&desc, fullpath, false);
+    SETUP_SEARCH(&desc, fullpath, false); //查找挂载点
     ret = inode_find(&desc);
     if (ret < 0) {
         error = EACCES;
@@ -157,18 +164,20 @@ int chattr(const char *pathname, struct IATTR *attr)
     if (inode) {
 #ifndef CONFIG_DISABLE_MOUNTPOINT /* Check inode is not mount and has i_ops or like /dev dir */
         if ((!INODE_IS_MOUNTPT(inode)) && ((inode->u.i_ops != NULL) || S_ISDIR(statBuff.st_mode))) {
-            ret = pseudo_chattr(inode, attr);
+			//是一个目录，但不是挂载点
+            ret = pseudo_chattr(inode, attr);  //修改属性
             if (ret < 0) {
                 error = -ret;
                 goto err_free_inode;
             }
         } else if (INODE_IS_MOUNTPT(inode) && (inode->u.i_mops->chattr)) /* Inode is match the relpath */
         {
+        	//挂载点
             if (!strlen(relpath)) {
                 error = EEXIST;
                 goto err_free_inode;
             }
-
+			//使用对应文件系统的对应方法来执行
             ret = inode->u.i_mops->chattr(inode, relpath, attr);
             if (ret < 0) {
                 error = -ret;

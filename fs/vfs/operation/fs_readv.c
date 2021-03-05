@@ -38,6 +38,7 @@
 #include "inode/inode.h"
 #include "user_copy.h"
 
+//在读取数据到分离式缓冲区之前，先读入连续性缓冲区
 static char *pread_buf_and_check(int fd, const struct iovec *iov, int iovcnt, ssize_t *totalbytesread, off_t *offset)
 {
     char *buf = NULL;
@@ -45,23 +46,24 @@ static char *pread_buf_and_check(int fd, const struct iovec *iov, int iovcnt, ss
     int i;
 
     if ((iov == NULL) || (iovcnt > IOV_MAX)) {
-        *totalbytesread = VFS_ERROR;
+        *totalbytesread = VFS_ERROR;   //分离式缓冲区不合法
         return NULL;
     }
 
     for (i = 0; i < iovcnt; ++i) {
         if (SSIZE_MAX - buflen < iov[i].iov_len) {
-            set_errno(EINVAL);
+            set_errno(EINVAL); //总尺寸过大
             return NULL;
         }
-        buflen += iov[i].iov_len;
+        buflen += iov[i].iov_len;  //汇总缓冲区总尺寸
     }
 
     if (buflen == 0) {
-        *totalbytesread = 0;
+        *totalbytesread = 0;  //总尺寸为0，无法读取数据
         return NULL;
     }
 
+	//创建连续式缓冲区
     buf = (char *)LOS_VMalloc(buflen * sizeof(char));
     if (buf == NULL) {
         set_errno(ENOMEM);
@@ -69,16 +71,18 @@ static char *pread_buf_and_check(int fd, const struct iovec *iov, int iovcnt, ss
         return buf;
     }
 
+	//并从文件读数据到连续式缓冲区
     *totalbytesread = (offset == NULL) ? read(fd, buf, buflen)
                                        : pread(fd, buf, buflen, *offset);
     if ((*totalbytesread == VFS_ERROR) || (*totalbytesread == 0)) {
-        LOS_VFree(buf);
+        LOS_VFree(buf);  //读失败
         return NULL;
     }
 
-    return buf;
+    return buf;  //读成功，返回缓冲区首地址
 }
 
+//从文件指定偏移位置开始读入数据，放入离散式缓冲区
 ssize_t vfs_readv(int fd, const struct iovec *iov, int iovcnt, off_t *offset)
 {
     int i;
@@ -89,43 +93,49 @@ ssize_t vfs_readv(int fd, const struct iovec *iov, int iovcnt, off_t *offset)
     ssize_t totalbytesread = 0;
     ssize_t bytesleft;
 
+	//先从文件将数据读入连续式缓冲区
     buf = pread_buf_and_check(fd, iov, iovcnt, &totalbytesread, offset);
     if (buf == NULL) {
-        return totalbytesread;
+        return totalbytesread;  //读失败
     }
 
+	//然后再将数据从连续式缓冲区拷贝入离散式缓冲区
     curbuf = buf;
     bytesleft = totalbytesread;
+	//遍历离散式缓冲区
     for (i = 0; i < iovcnt; ++i) {
-        bytestoread = iov[i].iov_len;
+        bytestoread = iov[i].iov_len; //当前缓冲区尺寸
         if (bytestoread == 0) {
-            continue;
+            continue;  //当前缓冲区无空间，下一个缓冲区继续
         }
 
         if (bytesleft <= bytestoread) {
+			//当前缓冲区能装完剩余数据，拷贝并退出
             ret = LOS_CopyFromKernel(iov[i].iov_base, bytesleft, curbuf, bytesleft);
             bytesleft = ret;
             goto out;
         }
 
+		//拷贝满当前缓冲区
         ret = LOS_CopyFromKernel(iov[i].iov_base, bytestoread, curbuf, bytestoread);
         if (ret != 0) {
             bytesleft = bytesleft - (bytestoread - ret);
             goto out;
         }
-        bytesleft -= bytestoread;
-        curbuf += bytestoread;
+		//然后继续下一个缓冲区拷贝
+        bytesleft -= bytestoread;  //剩余需要拷贝的数据量减少
+        curbuf += bytestoread;  //连续式缓冲区下一次拷贝起始位置调整
     }
 
 out:
-    LOS_VFree(buf);
+    LOS_VFree(buf); //释放用于辅助读取的连续式缓冲区
     if ((i == 0) && (ret == iov[i].iov_len)) {
         /* failed in the first iovec copy, and 0 bytes copied */
-        set_errno(EFAULT);
+        set_errno(EFAULT);  //第1个缓冲区拷贝失败，且1个字节都没有拷贝成功的情况
         return VFS_ERROR;
     }
 
-    return totalbytesread - bytesleft;
+    return totalbytesread - bytesleft;  //返回成功拷贝的字节数(成功读取的字节数)
 }
 
 ssize_t readv(int fd, const struct iovec *iov, int iovcnt)

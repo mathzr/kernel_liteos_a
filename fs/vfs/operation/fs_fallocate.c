@@ -46,7 +46,7 @@
 /****************************************************************************
  * Name: file_fallocate
  ****************************************************************************/
-
+//为文件分配连续的数据区域
 static ssize_t file_fallocate(FAR struct file *filep, int mode, off_t offset, off_t len)
 {
     FAR struct inode *inode = NULL;
@@ -54,27 +54,25 @@ static ssize_t file_fallocate(FAR struct file *filep, int mode, off_t offset, of
     int err;
 
     if (len <= 0) {
-        err = EINVAL;
+        err = EINVAL; //数据区尺寸不合法
         goto errout;
     }
 
     /* Was this file opened for write access? */
-
     if (((unsigned int)(filep->f_oflags) & O_ACCMODE) == O_RDONLY) {
-        err = EACCES;
+        err = EACCES;  //文件不可写
         goto errout;
     }
 
     /* Is a driver registered? Does it support the fallocate method? */
-
     inode = filep->f_inode;
     if (!inode || !inode->u.i_mops || !inode->u.i_mops->fallocate) {
-        err = EBADF;
+        err = EBADF;  //此文件对应的设备驱动不支持fallocate操作
         goto errout;
     }
 
     /* Yes, then let the driver perform the fallocate */
-
+	//使用驱动提供的方法
     ret = inode->u.i_mops->fallocate(filep, mode, offset, len);
     if (ret < 0) {
         err = -ret;
@@ -109,6 +107,7 @@ errout:
  *
  ********************************************************************************************/
 
+//为文件申请一段连续的数据区域
 int fallocate(int fd, int mode, off_t offset, off_t len)
 {
 #if CONFIG_NFILE_DESCRIPTORS > 0
@@ -121,7 +120,7 @@ int fallocate(int fd, int mode, off_t offset, off_t len)
     if ((unsigned int)fd >= CONFIG_NFILE_DESCRIPTORS)
 #endif
     {
-        set_errno(EBADF);
+        set_errno(EBADF);  //文件描述符越界
         return VFS_ERROR;
     }
 
@@ -129,7 +128,7 @@ int fallocate(int fd, int mode, off_t offset, off_t len)
 
     /* The descriptor is in the right range to be a file descriptor... write to the file.*/
 
-    int ret = fs_getfilep(fd, &filep);
+    int ret = fs_getfilep(fd, &filep);  //获取文件控制块指针
     if (ret < 0)
       {
         /* The errno value has already been set */
@@ -138,12 +137,12 @@ int fallocate(int fd, int mode, off_t offset, off_t len)
 
     if (filep->f_oflags & O_DIRECTORY)
       {
-        set_errno(EBADF);
+        set_errno(EBADF);  //不支持对目录做此操作
         return VFS_ERROR;
       }
 
     /* Perform the fallocate operation using the file descriptor as an index */
-
+	//执行具体的alloc操作
     return file_fallocate(filep, mode, offset, len);
 #endif
 }

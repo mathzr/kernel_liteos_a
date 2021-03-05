@@ -38,6 +38,7 @@
 #include "linux/spinlock.h"
 #include "disk_pri.h"
 
+//初始化虚拟文件系统
 void los_vfs_init(void)
 {
     int err;
@@ -46,32 +47,36 @@ void los_vfs_init(void)
     struct inode *dev = NULL;
 
     if (g_vfs_init) {
-        return;
+        return;  //vfs不能重复初始化
     }
 
 #ifdef LOSCFG_FS_FAT_DISK
-    spin_lock_init(&g_diskSpinlock);
-    spin_lock_init(&g_diskFatBlockSpinlock);
+    spin_lock_init(&g_diskSpinlock);  //磁盘操作自旋锁初始化
+    spin_lock_init(&g_diskFatBlockSpinlock); //磁盘缓存操作自旋锁初始化
 #endif
-    files_initlist(&tg_filelist);
-    fs_initialize();
+    files_initlist(&tg_filelist);  //初始化全局已打开文件列表
+    fs_initialize(); //文件系统初始化
+    //注册根目录文件节点
     if ((err = inode_reserve("/", &g_root_inode)) < 0) {
         PRINT_ERR("los_vfs_init failed error %d\n", -err);
         return;
     }
+	//设置根目录的权限，目录，创建者读写执行，同组读执行，其它读执行
     g_root_inode->i_mode |= S_IFDIR | S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
 
+	//创建设备文件所在的目录  /dev
     if ((err = inode_reserve("/dev", &dev)) < 0) {
         PRINT_ERR("los_vfs_init failed error %d\n", -err);
         return;
     }
+	//设置 /dev 权限， 目录，创建者读写执行，同组读执行，其它读执行
     dev->i_mode |= S_IFDIR | S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
 
-    retval = init_file_mapping();
+    retval = init_file_mapping();  //初始化文件映射
     if (retval != LOS_OK) {
         PRINT_ERR("Page cache file map init failed\n");
         return;
     }
 
-    g_vfs_init = true;
+    g_vfs_init = true; //标记虚拟文件系统初始化完成
 }

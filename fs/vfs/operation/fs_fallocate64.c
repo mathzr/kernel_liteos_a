@@ -47,7 +47,7 @@
 /****************************************************************************
  * Name: file_fallocate
  ****************************************************************************/
-
+//²Î¿¼file_fallocate
 ssize_t file_fallocate64(FAR struct file *filep, int mode, off64_t offset, off64_t len)
 {
     FAR struct inode *inode = NULL;
@@ -109,7 +109,7 @@ errout:
  *
  *
  ********************************************************************************************/
-
+//²Î¿¼fallocate
 int fallocate64(int fd, int mode, off64_t offset, off64_t len)
 {
 #if CONFIG_NFILE_DESCRIPTORS > 0
