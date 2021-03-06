@@ -133,7 +133,7 @@ int VfsPermissionCheck(uint fuid, uint fgid, mode_t fileMode, int accMode)
 }
 
 #ifdef VFS_USING_WORKDIR
-//设置当前工作路径
+//设置当前进程工作路径
 int SetWorkDir(char *dir, size_t len)
 {
   errno_t ret;
@@ -473,6 +473,7 @@ void sync(void)
 #endif
 }
 
+//获取目录项的全路径
 static char *ls_get_fullpath(const char *path, struct dirent *pdirent)
 {
     char *fullpath = NULL;
@@ -480,14 +481,14 @@ static char *ls_get_fullpath(const char *path, struct dirent *pdirent)
 
     if (path[1] != '\0') {
         /* 2: The position of the path character: / and the end character /0 */
-
+		//path参数至少2个字符的情况，拼接path和dirent需要额外的'/'和空字符
         fullpath = (char *)malloc(strlen(path) + strlen(pdirent->d_name) + 2);
         if (fullpath == NULL) {
             goto exit_with_nomem;
         }
 
         /* 2: The position of the path character: / and the end character /0 */
-
+		//字符串拼接
         ret = snprintf_s(fullpath, strlen(path) + strlen(pdirent->d_name) + 2,
                          strlen(path) + strlen(pdirent->d_name) + 1, "%s/%s", path, pdirent->d_name);
         if (ret < 0) {
@@ -497,14 +498,14 @@ static char *ls_get_fullpath(const char *path, struct dirent *pdirent)
         }
     } else {
         /* 2: The position of the path character: / and the end character /0 */
-
+		//直接在根目录下的目录项
         fullpath = (char *)malloc(strlen(pdirent->d_name) + 2);
         if (fullpath == NULL) {
             goto exit_with_nomem;
         }
 
         /* 2: The position of the path character: / and the end character /0 */
-
+		//拼接根目录和目录项
         ret = snprintf_s(fullpath, strlen(pdirent->d_name) + 2, strlen(pdirent->d_name) + 1,
                          "/%s", pdirent->d_name);
         if (ret < 0) {
@@ -520,6 +521,7 @@ exit_with_nomem:
     return (char *)NULL;
 }
 
+//输出文件信息
 static void PrintFileInfo64(const struct stat64 *stat64Info, const char *name)
 {
     mode_t mode;
@@ -529,17 +531,20 @@ static void PrintFileInfo64(const struct stat64 *stat64Info, const char *name)
 
     for (i = 0; i < UGO_NUMS; i++) {
         mode = stat64Info->st_mode >> (USER_MODE_SHIFT - i * UGO_NUMS);
-        str[i][0] = (mode & READ_OP) ? 'r' : '-';
-        str[i][1] = (mode & WRITE_OP) ? 'w' : '-';
-        str[i][UGO_NUMS - 1] = (mode & EXEC_OP) ? 'x' : '-';
+        str[i][0] = (mode & READ_OP) ? 'r' : '-';  //是否具有读权限
+        str[i][1] = (mode & WRITE_OP) ? 'w' : '-'; //是否具有写权限
+        str[i][UGO_NUMS - 1] = (mode & EXEC_OP) ? 'x' : '-'; //是否具有执行权限
     }
 
-    dirFlag = (S_ISDIR(stat64Info->st_mode)) ? 'd' : '-';
+    dirFlag = (S_ISDIR(stat64Info->st_mode)) ? 'd' : '-'; //是否为目录
 
+	//除了上述信息，还输出用户id, 组id，目录项名称
     PRINTK("%c%s%s%s %-8lld u:%-5d g:%-5d %-10s\n", dirFlag,
            str[0], str[1], str[UGO_NUMS - 1], stat64Info->st_size, stat64Info->st_uid, stat64Info->st_gid, name);
 }
 
+
+//与上一个函数类似
 static void PrintFileInfo(const struct stat *statInfo, const char *name)
 {
     mode_t mode;
@@ -560,6 +565,8 @@ static void PrintFileInfo(const struct stat *statInfo, const char *name)
            str[0], str[1], str[UGO_NUMS - 1], statInfo->st_size, statInfo->st_uid, statInfo->st_gid, name);
 }
 
+
+//ls命令处理指定的目录
 void ls(const char *pathname)
 {
     struct stat64 stat64_info;
@@ -572,7 +579,9 @@ void ls(const char *pathname)
     DIR *d = NULL;
 
     if (pathname == NULL) {
+		//没有指定目录
 #ifdef VFS_USING_WORKDIR
+		//则使用当前工作目录
         UINTPTR lock_flags;
         LosProcessCB *curr = OsCurrProcessGet();
 
@@ -582,12 +591,14 @@ void ls(const char *pathname)
         path = strdup(curr->files->workdir);
         spin_unlock_irqrestore(&curr->files->workdir_lock, lock_flags);
 #else
+		//不支持当前工作目录，则显示根目录
         path = strdup("/");
 #endif
         if (path == NULL) {
-            return;
+            return;  //复制目录字符串失败，那就没有办法执行了
         }
     } else {
+    	//对用户输入的目录做规范化处理，得到全路径规范的路径字符串
         ret = vfs_normalize_path(NULL, pathname, &path);
         if (ret < 0) {
             set_errno(-ret);
@@ -597,20 +608,23 @@ void ls(const char *pathname)
 
     /* list all directory and file*/
 
-    d = opendir(path);
+    d = opendir(path);  //打开这个目录
     if (d == NULL) {
-        perror("ls error");
+        perror("ls error");  //打开失败
     } else {
         PRINTK("Directory %s:\n", path);
+		//打开成功，则显示目录内容
         do {
-            pdirent = readdir(d);
+			//遍历目录下的所有目录项
+            pdirent = readdir(d); 
             if (pdirent == NULL) {
-                break;
+                break; //遍历完成
             } else {
                 if (!strcmp(pdirent->d_name, ".") || !strcmp(pdirent->d_name, "..")) {
-                    continue;
+                    continue;  //不显示 这2个目录
                 }
                 (void)memset_s(&stat_info, sizeof(struct stat), 0, sizeof(struct stat));
+				//将目录和目录项组合成完整路径名
                 fullpath = ls_get_fullpath(path, pdirent);
                 if (fullpath == NULL) {
                     free(path);
@@ -619,12 +633,13 @@ void ls(const char *pathname)
                 }
 
                 fullpath_bak = fullpath;
+				//然后查询和输出目录项内容
                 if (stat64(fullpath, &stat64_info) == 0) {
                     PrintFileInfo64(&stat64_info, pdirent->d_name);
                 } else if (stat(fullpath, &stat_info) == 0) {
                     PrintFileInfo(&stat_info, pdirent->d_name);
                 } else
-                    PRINTK("BAD file: %s\n", pdirent->d_name);
+                    PRINTK("BAD file: %s\n", pdirent->d_name);  //无法查询到目录项的内容
                 free(fullpath_bak);
             }
         } while (1);
@@ -636,13 +651,14 @@ void ls(const char *pathname)
     return;
 }
 
-
+//获取某路径名规范化后的表示，并且判断这个路径的存在性
 char *realpath(const char *path, char *resolved_path)
 {
     int ret, result;
     char *new_path = NULL;
     struct stat buf;
 
+	//规范路径名
     ret = vfs_normalize_path(NULL, path, &new_path);
     if (ret < 0) {
         ret = -ret;
@@ -650,6 +666,7 @@ char *realpath(const char *path, char *resolved_path)
         return NULL;
     }
 
+	//判断路径名是否存在
     result = stat(new_path, &buf);
 
     if (resolved_path == NULL) {
@@ -660,6 +677,7 @@ char *realpath(const char *path, char *resolved_path)
         return new_path;
     }
 
+	//保存规范化后的全路径名
     ret = strcpy_s(resolved_path, PATH_MAX, new_path);
     if (ret != EOK) {
         ret = -ret;
@@ -675,6 +693,7 @@ char *realpath(const char *path, char *resolved_path)
     return resolved_path;
 }
 
+//显示系统当前打开的文件
 void lsfd(void)
 {
     FAR struct filelist *f_list = NULL;
@@ -685,27 +704,30 @@ void lsfd(void)
     f_list = &tg_filelist;
 
     PRINTK("   fd    filename\n");
-    ret = sem_wait(&f_list->fl_sem);
+    ret = sem_wait(&f_list->fl_sem); //获取信号量
     if (ret < 0) {
         PRINTK("sem_wait error, ret=%d\n", ret);
         return;
     }
 
-    while (i < CONFIG_NFILE_DESCRIPTORS) {
-        node = files_get_openfile(i);
+    while (i < CONFIG_NFILE_DESCRIPTORS) { //遍历所有已打开的文件
+        node = files_get_openfile(i);  //获取对应的文件索引节点
         if (node) {
+			//输出文件全路径信息
             PRINTK("%5d   %s\n", i, f_list->fl_files[i].f_path);
         }
         i++;
     }
-    (void)sem_post(&f_list->fl_sem);
+    (void)sem_post(&f_list->fl_sem); //释放信号量
 }
 
+//获取当前进程的权限掩码
 mode_t GetUmask(void)
 {
     return OsCurrProcessGet()->umask;
 }
 
+//设置当前进程的权限掩码
 mode_t SysUmask(mode_t mask)
 {
     UINT32 intSave;
@@ -716,7 +738,7 @@ mode_t SysUmask(mode_t mask)
     oldUmask = OsCurrProcessGet()->umask;
     OsCurrProcessGet()->umask = umask;
     SCHEDULER_UNLOCK(intSave);
-    return oldUmask;
+    return oldUmask; //返回原掩码
 }
 
 #ifdef __cplusplus
