@@ -43,6 +43,7 @@
 STATIC Atomic g_ncpu = 1;
 #endif
 
+//输出 cpu信息，是否多核，中断控制器版本，构建时间，内核版本，调试or发布版内核
 LITE_OS_SEC_TEXT_INIT VOID OsSystemInfo(VOID)
 {
 #ifdef LOSCFG_DEBUG_VERSION
@@ -147,25 +148,30 @@ LITE_OS_SEC_TEXT_INIT VOID release_secondary_cores(VOID)
 #endif /* LOSCFG_TEE_ENABLE */
 #endif /* LOSCFG_KERNEL_SMP */
 
+//本函数由汇编代码调用，属于操作系统代码C语言部分入口
 LITE_OS_SEC_TEXT_INIT INT32 main(VOID)
 {
     UINT32 uwRet = LOS_OK;
 
-    OsSetMainTask();
-    OsCurrTaskSet(OsGetMainTask());
+	//初始化每个核对应的main线程，
+    OsSetMainTask();  
+    OsCurrTaskSet(OsGetMainTask());  //设置当前任务为当前CPU核对应的main线程
 
     /* set smp system counter freq */
 #if (LOSCFG_KERNEL_SMP == YES)
 #ifndef LOSCFG_TEE_ENABLE
+	//设置系统时钟频率
     HalClockFreqWrite(OS_SYS_CLOCK);
 #endif
 #endif
 
     /* system and chip info */
+	//输出系统和芯片信息
     OsSystemInfo();
 
     PRINT_RELEASE("\nmain core booting up...\n");
 
+	//系统初始化的主要逻辑
     uwRet = OsMain();
     if (uwRet != LOS_OK) {
         return LOS_NOK;
@@ -173,12 +179,13 @@ LITE_OS_SEC_TEXT_INIT INT32 main(VOID)
 
 #if (LOSCFG_KERNEL_SMP == YES)
     PRINT_RELEASE("releasing %u secondary cores\n", LOSCFG_KERNEL_SMP_CORE_NUM - 1);
+	//等待所有CPU核启动起来
     release_secondary_cores();
 #endif
 
     CPU_MAP_SET(0, OsHwIDGet());
 
-    OsStart();
+    OsStart();  
 
     while (1) {
         __asm volatile("wfi");

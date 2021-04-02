@@ -138,7 +138,8 @@ VOID __attribute__((weak)) SystemInit(VOID)
 
 LITE_OS_SEC_TEXT_INIT VOID osRegister(VOID)
 {
-    g_sysClock = OS_SYS_CLOCK;
+    g_sysClock = OS_SYS_CLOCK;  //记录时钟主频
+    //记录每秒的滴答数
     g_tickPerSecond =  LOSCFG_BASE_CORE_TICK_PER_SECOND;
 
     return;

@@ -103,21 +103,24 @@ VOID* OsGetMainTask()
     return (g_mainTask + ArchCurrCpuid());
 }
 
+//为每个CPU核初始化main线程
 VOID OsSetMainTask()
 {
     UINT32 i;
-    CHAR *name = "osMain";
+    CHAR *name = "osMain";  //线程名
 
+	//初始化每个CPU核对应的main线程
     for (i = 0; i < LOSCFG_KERNEL_CORE_NUM; i++) {
-        g_mainTask[i].taskStatus = OS_TASK_STATUS_UNUSED;
-        g_mainTask[i].taskID = LOSCFG_BASE_CORE_TSK_LIMIT;
-        g_mainTask[i].priority = OS_TASK_PRIORITY_LOWEST;
+        g_mainTask[i].taskStatus = OS_TASK_STATUS_UNUSED;  //空闲状态
+        g_mainTask[i].taskID = LOSCFG_BASE_CORE_TSK_LIMIT; //特殊的ID
+        g_mainTask[i].priority = OS_TASK_PRIORITY_LOWEST;  //最低优先级
 #if (LOSCFG_KERNEL_SMP_LOCKDEP == YES)
-        g_mainTask[i].lockDep.lockDepth = 0;
-        g_mainTask[i].lockDep.waitLock = NULL;
+        g_mainTask[i].lockDep.lockDepth = 0;   //自旋锁深度目前为0
+        g_mainTask[i].lockDep.waitLock = NULL; //没有正在等待的自旋锁 
 #endif
+		//设置线程名为osMain
         (VOID)strncpy_s(g_mainTask[i].taskName, OS_TCB_NAME_LEN, name, OS_TCB_NAME_LEN - 1);
-        LOS_ListInit(&g_mainTask[i].lockList);
+        LOS_ListInit(&g_mainTask[i].lockList);   //还没有拥有任何互斥锁
     }
 }
 

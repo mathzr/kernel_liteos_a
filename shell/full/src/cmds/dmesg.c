@@ -70,14 +70,22 @@ extern "C" {
 
 #define BUF_MAX_INDEX (g_logBufSize - 1)
 
+//保护内核启动过程使用的日志缓冲区对应的自旋锁
 LITE_OS_SEC_BSS STATIC SPIN_LOCK_INIT(g_dmesgSpin);
 
+//日志缓冲区描述符
 STATIC DmesgInfo *g_dmesgInfo = NULL;
+//缓冲区尺寸
 STATIC UINT32 g_logBufSize = 0;
+//缓冲区内存地址(含描述符)
 STATIC VOID *g_mallocAddr = NULL;
+//日志等级
 STATIC UINT32 g_dmesgLogLevel = 3;
+//控制台锁
 STATIC UINT32 g_consoleLock = 0;
+//串口锁
 STATIC UINT32 g_uartLock = 0;
+//日志等级字符串
 STATIC const CHAR *g_levelString[] = {
     "EMG",
     "COMMON",
@@ -87,44 +95,50 @@ STATIC const CHAR *g_levelString[] = {
     "DEBUG"
 };
 
+//锁住控制台
 STATIC VOID OsLockConsole(VOID)
 {
     g_consoleLock = 1;
 }
 
+//解锁控制台
 STATIC VOID OsUnlockConsole(VOID)
 {
     g_consoleLock = 0;
 }
 
+//锁住串口
 STATIC VOID OsLockUart(VOID)
 {
     g_uartLock = 1;
 }
 
+//解锁串口
 STATIC VOID OsUnlockUart(VOID)
 {
     g_uartLock = 0;
 }
 
+//检查错误
 STATIC UINT32 OsCheckError(VOID)
 {
     if (g_dmesgInfo == NULL) {
-        return LOS_NOK;
+        return LOS_NOK; //无内核启动日志描述符
     }
 
     if (g_dmesgInfo->logSize > g_logBufSize) {
-        return LOS_NOK;
+        return LOS_NOK; //日志尺寸过大
     }
 
     if (((g_dmesgInfo->logSize == g_logBufSize) || (g_dmesgInfo->logSize == 0)) &&
         (g_dmesgInfo->logTail != g_dmesgInfo->logHead)) {
-        return LOS_NOK;
+        return LOS_NOK; //尺寸满或空，但日志头尾不相等
     }
 
     return LOS_OK;
 }
 
+//从日志缓冲区中读出日志
 STATIC INT32 OsDmesgRead(CHAR *buf, UINT32 len)
 {
     UINT32 readLen;
@@ -134,43 +148,48 @@ STATIC INT32 OsDmesgRead(CHAR *buf, UINT32 len)
     CHAR *logBuf = g_dmesgInfo->logBuf;
     errno_t ret;
 
-    if (OsCheckError()) {
+    if (OsCheckError()) { //检查缓冲区完整性
         return -1;
     }
     if (logSize == 0) {
-        return 0;
+        return 0; //没有数据可读
     }
 
+	//尽可能多的从缓冲区中读出日志
     readLen = len < logSize ? len : logSize;
 
-    if (head < tail) { /* Case A */
-        ret = memcpy_s(buf, len, logBuf + head, readLen);
+    if (head < tail) { /* Case A */ //有效数据在缓冲区中部
+        ret = memcpy_s(buf, len, logBuf + head, readLen); //只需要拷贝一次数据
         if (ret != EOK) {
             return -1;
         }
-        g_dmesgInfo->logHead += readLen;
-        g_dmesgInfo->logSize -= readLen;
-    } else { /* Case B */
+        g_dmesgInfo->logHead += readLen;  //移动下一次读取日志的位置
+        g_dmesgInfo->logSize -= readLen;  //调整缓冲区中剩余日志的尺寸
+    } else { /* Case B */ //有效数据在缓冲区的两端
         if (readLen <= (g_logBufSize - head)) {
-            ret = memcpy_s(buf, len, logBuf + head, readLen);
+			//需要读取的尺寸不超过尾部数据区
+            ret = memcpy_s(buf, len, logBuf + head, readLen); //只读一次就可以了
             if (ret != EOK) {
                 return -1;
             }
-            g_dmesgInfo->logHead += readLen;
-            g_dmesgInfo->logSize -= readLen;
+            g_dmesgInfo->logHead += readLen; //下一次读取的位置
+            g_dmesgInfo->logSize -= readLen; //剩余日志尺寸
         } else {
+			//需要读取2次，先把尾部读完
             ret = memcpy_s(buf, len, logBuf + head, g_logBufSize - head);
             if (ret != EOK) {
                 return -1;
             }
 
+			//再读取首部的部分数据
             ret = memcpy_s(buf + g_logBufSize - head, len - (g_logBufSize - head),
                            logBuf, readLen - (g_logBufSize - head));
             if (ret != EOK) {
                 return -1;
             }
+			//调整下一次读取数据的起始位置
             g_dmesgInfo->logHead = readLen - (g_logBufSize - head);
-            g_dmesgInfo->logSize -= readLen;
+            g_dmesgInfo->logSize -= readLen; //剩余的日志尺寸
         }
     }
     return (INT32)readLen;
@@ -307,6 +326,7 @@ UINT32 OsCheckUartLock(VOID)
     return g_uartLock;
 }
 
+//初始化dmesg缓冲区，本缓冲区主要用于记录启机阶段的调试信息
 UINT32 OsDmesgInit(VOID)
 {
     CHAR* buffer = NULL;
@@ -317,11 +337,11 @@ UINT32 OsDmesgInit(VOID)
     }
     g_mallocAddr = buffer;
     g_dmesgInfo = (DmesgInfo *)buffer;
-    g_dmesgInfo->logHead = 0;
-    g_dmesgInfo->logTail = 0;
-    g_dmesgInfo->logSize = 0;
-    g_dmesgInfo->logBuf = buffer + sizeof(DmesgInfo);
-    g_logBufSize = KERNEL_LOG_BUF_SIZE;
+    g_dmesgInfo->logHead = 0; //日志数据的起始位置
+    g_dmesgInfo->logTail = 0; //下一条日志的写入位置
+    g_dmesgInfo->logSize = 0; //剩余还未读取的日志存储空间大小
+    g_dmesgInfo->logBuf = buffer + sizeof(DmesgInfo); //日志缓冲区首地址
+    g_logBufSize = KERNEL_LOG_BUF_SIZE; //日志缓冲区长度
 
     return LOS_OK;
 }
