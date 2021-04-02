@@ -57,12 +57,13 @@ LITE_OS_SEC_BSS SPIN_LOCK_INIT(g_tickSpin);
 /*
  * Description : Tick interruption handler
  */
+ //时钟中断处理主要逻辑
 LITE_OS_SEC_TEXT VOID OsTickHandler(VOID)
 {
     UINT32 intSave;
 
     TICK_LOCK(intSave);
-    g_tickCount[ArchCurrCpuid()]++;
+    g_tickCount[ArchCurrCpuid()]++; //增加tick计数
     TICK_UNLOCK(intSave);
 
 #ifdef LOSCFG_KERNEL_VDSO
@@ -70,19 +71,19 @@ LITE_OS_SEC_TEXT VOID OsTickHandler(VOID)
 #endif
 
 #ifdef LOSCFG_KERNEL_TICKLESS
-    OsTickIrqFlagSet(OsTicklessFlagGet());
+    OsTickIrqFlagSet(OsTicklessFlagGet()); //判断是否开启了tickless模式，更新对应的中状态
 #endif
 
 #if (LOSCFG_BASE_CORE_TICK_HW_TIME == YES)
-    HalClockIrqClear(); /* diff from every platform */
+    HalClockIrqClear(); /* diff from every platform */ //清除时钟中断信号
 #endif
 
-    OsTimesliceCheck();
+    OsTimesliceCheck();  //检查线程或进程时间片，并根据需要重新调度
 
-    OsTaskScan(); /* task timeout scan */
+    OsTaskScan(); /* task timeout scan */ //检查所有线程或者进程是否等待某资源超时
 
 #if (LOSCFG_BASE_CORE_SWTMR == YES)
-    OsSwtmrScan();
+    OsSwtmrScan();  //处理软件定时器逻辑
 #endif
 }
 

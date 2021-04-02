@@ -40,6 +40,7 @@ extern "C" {
 
 #define OS_MAX_VALUE    0xFFFFFFFF
 
+//获取系统启机以来的滴答数
 LITE_OS_SEC_TEXT_MINOR UINT64 LOS_TickCountGet(VOID)
 {
     UINT32 intSave;
@@ -50,17 +51,19 @@ LITE_OS_SEC_TEXT_MINOR UINT64 LOS_TickCountGet(VOID)
      * the tick needs to be atomic.
      */
     TICK_LOCK(intSave);
-    tick = g_tickCount[0];
+    tick = g_tickCount[0]; //读取tick值，以0核数值为标准
     TICK_UNLOCK(intSave);
 
     return tick;
 }
 
+//每个tick含多少时钟周期
 LITE_OS_SEC_TEXT_MINOR UINT32 LOS_CyclePerTickGet(VOID)
 {
     return g_sysClock / LOSCFG_BASE_CORE_TICK_PER_SECOND;
 }
 
+//毫秒数转换成tick数
 LITE_OS_SEC_TEXT_MINOR UINT32 LOS_MS2Tick(UINT32 millisec)
 {
     if (millisec == OS_MAX_VALUE) {
@@ -70,6 +73,7 @@ LITE_OS_SEC_TEXT_MINOR UINT32 LOS_MS2Tick(UINT32 millisec)
     return ((UINT64)millisec * LOSCFG_BASE_CORE_TICK_PER_SECOND) / OS_SYS_MS_PER_SECOND;
 }
 
+//tick数转换成毫秒数
 LITE_OS_SEC_TEXT_MINOR UINT32 LOS_Tick2MS(UINT32 tick)
 {
     return ((UINT64)tick * OS_SYS_MS_PER_SECOND) / LOSCFG_BASE_CORE_TICK_PER_SECOND;

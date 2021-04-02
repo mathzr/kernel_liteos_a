@@ -38,30 +38,37 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+//在时钟中断里面检测线程或者进程时间片是否已用完
 LITE_OS_SEC_TEXT VOID OsTimesliceCheck(VOID)
 {
     LosTaskCB *runTask = NULL;
-    LosProcessCB *runProcess = OsCurrProcessGet();
-    if (runProcess->policy != LOS_SCHED_RR) {
-        goto SCHED_TASK;
+    LosProcessCB *runProcess = OsCurrProcessGet(); //当前进程
+    if (runProcess->policy != LOS_SCHED_RR) { //
+        goto SCHED_TASK; //进程不是时间片轮转调度，那么不考虑进程时间片
     }
 
+	//进程采用了时间片轮转调度算法
     if (runProcess->timeSlice != 0) {
+		//先扣除本进程的一个tick
         runProcess->timeSlice--;
         if (runProcess->timeSlice == 0) {
+			//如果本进程时间片用完，那么调度其他进程运行
             LOS_Schedule();
         }
     }
 
 SCHED_TASK:
-    runTask = OsCurrTaskGet();
+    runTask = OsCurrTaskGet();  //进程内的线程调度
     if (runTask->policy != LOS_SCHED_RR) {
-        return;
+        return; //当前线程没有采用时间片轮转算法，则不需要做处理
     }
 
+	//当前线程采用了时间片轮转调度算法
     if (runTask->timeSlice != 0) {
+		//扣除本线程的一个tick
         runTask->timeSlice--;
         if (runTask->timeSlice == 0) {
+			//线程时间片耗尽，选择一个新的线程来运行
             LOS_Schedule();
         }
     }

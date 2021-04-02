@@ -87,7 +87,7 @@ typedef struct {
 
 typedef struct {
     LOS_DL_LIST *sortLink;
-    UINT16 cursor;
+    UINT16 cursor;  //сн╠Й
     UINT16 reserved;
 } SortLinkAttribute;
 

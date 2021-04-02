@@ -87,7 +87,7 @@ typedef struct ProcessCB {
     UINT16               consoleID;                    /**< The console id of task belongs  */
     UINT16               processMode;                  /**< Kernel Mode:0; User Mode:1; */
     UINT32               parentProcessID;              /**< Parent process ID */
-    UINT32               exitCode;                     /**< Process exit status */
+    UINT32               exitCode;                     /**< Process exit status */ 
     LOS_DL_LIST          pendList;                     /**< Block list to which the process belongs */
     LOS_DL_LIST          childrenList;                 /**< Children process list */
     LOS_DL_LIST          exitChildList;                /**< Exit children process list */
@@ -338,6 +338,7 @@ STATIC INLINE BOOL OsProcessIsUserMode(const LosProcessCB *processCB)
  * |     | exit code  | core dump | signal |
  */
 #define OS_PRO_EXIT_OK 0
+
 
 STATIC INLINE VOID OsProcessExitCodeCoreDumpSet(LosProcessCB *processCB)
 {
