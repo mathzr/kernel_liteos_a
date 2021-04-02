@@ -53,9 +53,11 @@ int main(int argc, char * const *argv)
     }
 
     while (1) {
-        ret = waitpid(-1, 0, WNOHANG);
+		//周期性的检查是否有子进程退出
+		//如果有，则回收其资源
+        ret = waitpid(-1, 0, WNOHANG); //采用非阻塞方式
         if (ret == 0) {
-            sleep(1);
+            sleep(1); //每秒检查一次
         }
     };
 }
