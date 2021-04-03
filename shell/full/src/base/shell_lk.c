@@ -46,8 +46,8 @@
 extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
-//命令行内核日志处理
 
+//命令行内核日志处理
 
 //模块标识
 typedef enum {
@@ -117,7 +117,7 @@ VOID OsLkLogFileSet(const CHAR *str)
     if (str == NULL) {
         return;
     }
-    fp = fopen(str, "w+"); //创建并打开新日志文件
+    fp = fopen(str, "w+"); //创建并打开新日志文件,为了后续的写操作
     if (fp == NULL) {
         printf("Error can't open the %s file\n",str);
         return;

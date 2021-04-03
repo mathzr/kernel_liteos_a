@@ -244,6 +244,8 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
     OsLkLoggerInit(NULL);
 #endif
 
+//异常状态下受限shell功能所使用的内存池
+//这个功能单独占一个内存池，便于不受另外一个内存池的故障
 #ifdef LOSCFG_EXC_INTERACTION
 #ifdef LOSCFG_ARCH_CORTEX_M7
     /* 4096: 4K space for Stack */
@@ -257,7 +259,7 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
 #endif
 
 #if (LOSCFG_PLATFORM_HWI == YES)
-    OsHwiInit();
+    OsHwiInit();  //硬件中断框架初始化
 #endif
 
     OsExcInit();

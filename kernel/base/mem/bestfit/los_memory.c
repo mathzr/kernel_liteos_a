@@ -268,7 +268,7 @@ STATIC VOID OsMemNodeSave(LosMemDynNode *node);
 #define OS_MEM_MAGIC_VALID(value) \
     (((UINTPTR)(value) ^ ((UINTPTR)&(value))) == (UINTPTR)(-1))
 
-UINT8 *m_aucSysMem0 = NULL;  //内核内存池0
+UINT8 *m_aucSysMem0 = NULL;  //内核内存池0， 本内存池主要用于中断上下文中，以及shell中
 UINT8 *m_aucSysMem1 = NULL;  //内核内存池1
 
 #ifdef LOSCFG_BASE_MEM_NODE_SIZE_CHECK  //对内存节点进行合法性检查

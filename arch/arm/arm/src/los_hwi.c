@@ -48,19 +48,19 @@ LITE_OS_SEC_BSS  SPIN_LOCK_INIT(g_hwiSpin);
 #define HWI_LOCK(state)       LOS_SpinLockSave(&g_hwiSpin, &(state))
 #define HWI_UNLOCK(state)     LOS_SpinUnlockRestore(&g_hwiSpin, (state))
 
-size_t g_intCount[LOSCFG_KERNEL_CORE_NUM] = {0}; //每个核当前待处理的中断信号数目
+size_t g_intCount[LOSCFG_KERNEL_CORE_NUM] = {0}; //每个核当前正在处理的中断信号数目
 HwiHandleForm g_hwiForm[OS_HWI_MAX_NUM]; //中断向量表
-STATIC CHAR *g_hwiFormName[OS_HWI_MAX_NUM] = {0}; //中断名称列表
-STATIC UINT32 g_hwiFormCnt[OS_HWI_MAX_NUM] = {0}; //每个中断产生的次数
+STATIC CHAR *g_hwiFormName[OS_HWI_MAX_NUM] = {0}; //中断向量名称列表
+STATIC UINT32 g_hwiFormCnt[OS_HWI_MAX_NUM] = {0}; //每个中断号处理的次数
 
 VOID OsIncHwiFormCnt(UINT32 index)
 {
-    g_hwiFormCnt[index]++; //统计某中断产生的次数
+    g_hwiFormCnt[index]++; //增加某中断处理的次数
 }
 
 UINT32 OsGetHwiFormCnt(UINT32 index)
 {
-    return g_hwiFormCnt[index]; //获取某中断产生的次数
+    return g_hwiFormCnt[index]; //获取某中断处理的次数
 }
 
 CHAR *OsGetHwiFormName(UINT32 index)
@@ -70,22 +70,25 @@ CHAR *OsGetHwiFormName(UINT32 index)
 
 typedef VOID (*HWI_PROC_FUNC0)(VOID);
 typedef VOID (*HWI_PROC_FUNC2)(INT32, VOID *);
+
+//中断号为intNum的通用处理过程
 VOID OsInterrupt(UINT32 intNum)
 {
     HwiHandleForm *hwiForm = NULL;
     UINT32 *intCnt = NULL;
 
     intCnt = &g_intCount[ArchCurrCpuid()];
-    *intCnt = *intCnt + 1;  //增加当前CPU核的中断计数
+    *intCnt = *intCnt + 1;  //当前CPU核正在处理的中断数增加
 
 #ifdef LOSCFG_CPUP_INCLUDE_IRQ
-    OsCpupIrqStart();  //中断运维统计
+    OsCpupIrqStart();  //本cpu中断运行开始时间记录
 #endif
 
 #ifdef LOSCFG_KERNEL_TICKLESS
-    OsTicklessUpdate(intNum);  //低功耗状态下中断特殊处理
+    OsTicklessUpdate(intNum);  //低功耗状态下中断特殊处理，其它中断照常处理，无时钟中断
 #endif
     hwiForm = (&g_hwiForm[intNum]); //中断向量
+    //接着处理具体中断
 #ifndef LOSCFG_NO_SHARED_IRQ
     while (hwiForm->pstNext != NULL) {  //如果是共享中断，则有多个处理函数
         hwiForm = hwiForm->pstNext;
@@ -109,9 +112,9 @@ VOID OsInterrupt(UINT32 intNum)
 #endif
     ++g_hwiFormCnt[intNum];  //本中断号对应的中断处理次数增加
 
-    *intCnt = *intCnt - 1;  //本CPU当前待处理中断减少
+    *intCnt = *intCnt - 1;  //本CPU当前正在处理中断减少
 #ifdef LOSCFG_CPUP_INCLUDE_IRQ
-    OsCpupIrqEnd(intNum);  //中断状态下运维统计
+    OsCpupIrqEnd(intNum);  //本中断号运行时间停止统计
 #endif
 }
 
@@ -162,7 +165,7 @@ STATIC UINT32 OsHwiCreateNoShared(HWI_HANDLE_T hwiNum, HWI_MODE_T hwiMode,
 		//注册中断处理函数
         g_hwiForm[hwiNum].pfnHook = hwiHandler;
 
-        retParam = OsHwiCpIrqParam(irqParam); //创建中断参数
+        retParam = OsHwiCpIrqParam(irqParam); //拷贝中断参数
         if (retParam == LOS_NOK) {
             HWI_UNLOCK(intSave);
             return OS_ERRNO_HWI_NO_MEMORY;
