@@ -82,7 +82,7 @@ VOID OsExcHook(UINT32 excType, ExcContext *excBufAddr, UINT32 far, UINT32 fsr);
 //当前CPU嵌套的异常数目
 //嵌套异常的概念：即在处理异常的过程中，又发生了异常
 UINT32 g_curNestCount[LOSCFG_KERNEL_CORE_NUM] = { 0 }; 
-//是否在执行用户态代码的时候，产生的异常
+//是否在执行用户态代码的时候，触发的异常
 BOOL g_excFromUserMode[LOSCFG_KERNEL_CORE_NUM];
 //产生异常以后，触发的处理过程
 STATIC EXC_PROC_FUNC g_excHook = (EXC_PROC_FUNC)OsExcHook;
@@ -102,7 +102,7 @@ STATIC UINT32 g_nextExcWaitCpu = INVALID_CPUID;
 #define THUMB_INSTR_LEN     2U
 #define ARM_INSTR_LEN       4U
 #define POINTER_SIZE        4U
-#define WNR_BIT             11U //0b1011
+#define WNR_BIT             11U 
 #define FSR_FLAG_OFFSET_BIT 10U //第10位
 #define FSR_BITS_BEGIN_BIT  3U  //第3位
 
@@ -111,7 +111,7 @@ STATIC UINT32 g_nextExcWaitCpu = INVALID_CPUID;
 #define GET_FS(fsr) (((fsr) & 0xFU) | (((fsr) & (1U << 10)) >> 6))
 #define GET_WNR(dfsr) ((dfsr) & (1U << 11)) //获取第11位的值
 
-//一个合法的地址，处于合法的范围，并且对齐与指针变量边界(4字节对齐)
+//一个合法的地址，处于合法的范围，并且对齐于指针变量边界(4字节对齐)
 #define IS_VALID_ADDR(ptr) (((ptr) >= g_minAddr) &&       \
                             ((ptr) <= g_maxAddr) && \
                             (IS_ALIGNED((ptr), sizeof(CHAR *))))
@@ -138,7 +138,7 @@ UINT32 OsGetSystemStatus(VOID)
     } else if (cpuID == ArchCurrCpuid()) {
         flag = OS_SYSTEM_EXC_CURR_CPU; //当前CPU处于异常状态
     } else {
-        flag = OS_SYSTEM_EXC_OTHER_CPU; //某CPU处于异常状态
+        flag = OS_SYSTEM_EXC_OTHER_CPU; //其它某CPU处于异常状态
     }
 
     return flag;
@@ -237,7 +237,7 @@ UINT32 OsArmSharedPageFault(UINT32 excType, ExcContext *frame, UINT32 far, UINT3
         /* permission fault */
         case 0b01111: {
         /* permission fault */  //权限异常
-            BOOL user = (frame->regCPSR & CPSR_MODE_MASK) == CPSR_MODE_USR; //用户态？
+            BOOL user = (frame->regCPSR & CPSR_MODE_MASK) == CPSR_MODE_USR; //用户态产生的异常
             pfFlags |= write ? VM_MAP_PF_FLAG_WRITE : 0; //写异常
             pfFlags |= user ? VM_MAP_PF_FLAG_USER : 0;   //用户态异常
             pfFlags |= instruction_fault ? VM_MAP_PF_FLAG_INSTRUCTION : 0; //取指异常
@@ -256,7 +256,7 @@ STATIC VOID OsExcType(UINT32 excType, ExcContext *excBufAddr, UINT32 far, UINT32
     /* undefinited exception handling or software interrupt */
     if ((excType == OS_EXCEPT_UNDEF_INSTR) || (excType == OS_EXCEPT_SWI)) {
 		//引起异常后，PC值又自动移动到下一条指令了。
-		//这里做一个修正， arm和thumb指令长度不一样
+		//这里做一个修正， arm和thumb指令长度不一样，恢复发生异常时，PC寄存器对应的值
         if ((excBufAddr->regCPSR & INSTR_SET_MASK) == 0) { /* work status: ARM */
             excBufAddr->PC = excBufAddr->PC - ARM_INSTR_LEN;
         } else if ((excBufAddr->regCPSR & INSTR_SET_MASK) == 0x20) { /* work status: Thumb */
@@ -283,7 +283,7 @@ STATIC const CHAR *g_excTypeString[] = {
     "data abort",            //取数据异常
     "fiq",                   //快速中断
     "address abort",         //地址总线异常 
-    "irq"                    //中断 
+    "irq"                    //硬件中断 
 };
 
 
@@ -360,25 +360,25 @@ STATIC VOID OsExcSysInfo(UINT32 excType, const ExcContext *excBufAddr)
 			//用户态程序触发的异常
             region = LOS_RegionFind(runProcess->vmSpace, (VADDR_T)excBufAddr->PC);
             if (region != NULL) {
-				//输出异常产生的位置--异常代码相对于代码区首地址的偏移
+				//输出代码文件名--异常代码相对于代码区首地址的偏移
                 PrintExcInfo("in %s ---> 0x%x", OsGetRegionNameOrFilePath(region),
                              (VADDR_T)excBufAddr->PC - OsGetTextRegionBase(region, runProcess));
             }
         }
 
-        PrintExcInfo("\nulr   = 0x%x ", excBufAddr->ULR);
+        PrintExcInfo("\nulr   = 0x%x ", excBufAddr->ULR);  //预期的返回地址
         region = LOS_RegionFind(runProcess->vmSpace, (VADDR_T)excBufAddr->ULR);
         if (region != NULL) {
-			//产生异常的函数的调用方的地址
+			//产生异常的函数的调用方的文件名和地址
             PrintExcInfo("in %s ---> 0x%x", OsGetRegionNameOrFilePath(region),
                          (VADDR_T)excBufAddr->ULR - OsGetTextRegionBase(region, runProcess));
         }
-        PrintExcInfo("\nusp   = 0x%x", excBufAddr->USP);
+        PrintExcInfo("\nusp   = 0x%x", excBufAddr->USP);  //当前用户态栈顶
     } else {
         PrintExcInfo("\nklr   = 0x%x\n"
                      "ksp   = 0x%x\n",
-                     excBufAddr->LR,
-                     excBufAddr->SP);
+                     excBufAddr->LR,  //内核态返回地址
+                     excBufAddr->SP); //内核态栈顶
     }
 
     PrintExcInfo("fp    = 0x%x\n", excBufAddr->R11);
@@ -448,7 +448,7 @@ STATIC VOID OsDumpExcVaddrRegion(LosVmSpace *space, LosVmMapRegion *region)
 		//查询是否已存在物理页
         if (LOS_ArchMmuQuery(&space->archMmu, pageBase, &addr, NULL) != LOS_OK) {
             if (startPaddr == 0) {
-                continue; //物理页不存在
+                continue; //一个物理页都还没有
             }
         } else if (startPaddr == 0) {
             startVaddr = pageBase; //起始物理页对应的虚拟页
@@ -467,6 +467,7 @@ STATIC VOID OsDumpExcVaddrRegion(LosVmSpace *space, LosVmMapRegion *region)
         }
 		//遇到第一个不连续的物理页，把上一段连续物理页相关信息输出一下
         if (mmuFlag == TRUE) {
+			//第一段连续物理页信息要输出标题行
             PrintExcInfo("       uvaddr       kvaddr       mapped size\n");
             mmuFlag = FALSE;
         }
@@ -496,7 +497,7 @@ STATIC VOID OsDumpProcessUsedMemRegion(LosProcessCB *runProcess, LosVmSpace *run
             OsDumpExcVaddrRegion(runspace, region);
         }
         count++;
-        (VOID)OsRegionOverlapCheckUnlock(runspace, region);
+        (VOID)OsRegionOverlapCheckUnlock(runspace, region);  //检查内存区之间是否重叠
     RB_SCAN_SAFE_END(&space->regionRbTree, pstRbNodeTemp, pstRbNodeNext)
 }
 
@@ -534,10 +535,10 @@ VOID OsDumpContextMem(const ExcContext *excBufAddr)
     UINT32 count = 0;
     const UINT32 *excReg = NULL;
     if (g_excFromUserMode[ArchCurrCpuid()] == TRUE) {
-        return;  //只输出内核模式下的异常相关信息
+        return;  //只输出内核程序触发的异常的情况
     }
 
-	//输出相关寄存器所表明的内存区
+	//输出相关寄存器地址所描述的相邻内存区
     for (excReg = &(excBufAddr->R0); count <= DUMPREGS; excReg++, count++) {
         if (IS_VALID_ADDR(*excReg)) {
             PrintExcInfo("\ndump mem around R%u:%p", count, (*excReg));
@@ -545,67 +546,75 @@ VOID OsDumpContextMem(const ExcContext *excBufAddr)
         }
     }
 
-	//输出栈空间的部分内容
+	//输出栈顶附近的部分内容
     if (IS_VALID_ADDR(excBufAddr->SP)) {
         PrintExcInfo("\ndump mem around SP:%p", excBufAddr->SP);
         OsDumpMemByte(DUMPSIZE, (excBufAddr->SP - (DUMPSIZE >> 1)));
     }
 }
 
+//从异常状态恢复
 STATIC VOID OsExcRestore(UINTPTR taskStackPointer)
 {
     UINT32 currCpuID = ArchCurrCpuid();
 
-    g_excFromUserMode[currCpuID] = FALSE;
-    g_intCount[currCpuID] = 0;
-    g_curNestCount[currCpuID] = 0;
+    g_excFromUserMode[currCpuID] = FALSE;  //清除cpu的用户态进程异常状态
+    g_intCount[currCpuID] = 0;  //当前所有中断都完成了处理
+    g_curNestCount[currCpuID] = 0; //没有嵌套执行的中断
 #if (LOSCFG_KERNEL_SMP == YES)
-    OsPercpuGet()->excFlag = CPU_RUNNING;
+    OsPercpuGet()->excFlag = CPU_RUNNING; //当前CPU恢复正常
 #endif
-    OsPercpuGet()->taskLockCnt = 0;
+    OsPercpuGet()->taskLockCnt = 0; //允许当前CPU参与线程调度
 
-    OsSetCurrCpuSp(taskStackPointer);
+    OsSetCurrCpuSp(taskStackPointer); //设置当前CPU的栈顶
 }
 
+//处理用户态程序产生的异常
 STATIC VOID OsUserExcHandle(ExcContext *excBufAddr)
 {
     UINT32 currCpu = ArchCurrCpuid();
     LosProcessCB *runProcess = OsCurrProcessGet();
 
     if (g_excFromUserMode[ArchCurrCpuid()] == FALSE) {
-        return;
+        return; //不是用户态程序产生的异常
     }
 
 #if (LOSCFG_KERNEL_SMP == YES)
     LOS_SpinLock(&g_excSerializerSpin);
     if (g_nextExcWaitCpu != INVALID_CPUID) {
-        g_currHandleExcCpuID = g_nextExcWaitCpu;
+        g_currHandleExcCpuID = g_nextExcWaitCpu;  //即将处理下一个CPU异常
         g_nextExcWaitCpu = INVALID_CPUID;
     } else {
-        g_currHandleExcCpuID = INVALID_CPUID;
+        g_currHandleExcCpuID = INVALID_CPUID;  //当前CPU的异常处理结束
     }
     g_currHandleExcPID = OS_INVALID_VALUE;
     LOS_SpinUnlock(&g_excSerializerSpin);
 #else
-    g_currHandleExcCpuID = INVALID_CPUID;
+    g_currHandleExcCpuID = INVALID_CPUID;  //当前CPU的异常处理结束
 #endif
+	//进程离开退出状态
     runProcess->processStatus &= ~OS_PROCESS_FLAG_EXIT;
 
+	//从异常状态恢复
     OsExcRestore(excBufAddr->SP);
 
 #if (LOSCFG_KERNEL_SMP == YES)
 #ifdef LOSCFG_FS_VFS
+	//唤醒控制台正常工作
     OsWakeConsoleSendTask();
 #endif
 #endif
 
 #ifdef LOSCFG_SHELL_EXCINFO
+	//core dump文件已成功生成
     OsProcessExitCodeCoreDumpSet(runProcess);
 #endif
+	//设置进程的SIGUSR2信号
     OsProcessExitCodeSignalSet(runProcess, SIGUSR2);
     /* kill user exc process */
-    LOS_Exit(OS_PRO_EXIT_OK);
+    LOS_Exit(OS_PRO_EXIT_OK);  //退出当前进程
 
+	//下面的代码正常情况不应该执行
     /* User mode exception handling failed , which normally does not exist */
     g_curNestCount[currCpu]++;
     g_intCount[currCpu]++;
@@ -617,33 +626,38 @@ STATIC INLINE BOOL IsValidFP(UINTPTR regFP, UINTPTR start, UINTPTR end, vaddr_t 
 {
     LosProcessCB *runProcess = NULL;
     LosVmSpace *runspace = NULL;
-    VADDR_T kvaddr = regFP;
+    VADDR_T kvaddr = regFP;  //初始时假定是内核空间
     PADDR_T paddr;
 
     if (!((regFP > start) && (regFP < end) && IS_ALIGNED(regFP, sizeof(CHAR *)))) {
-        return FALSE;
+        return FALSE; //不是合法的FP
     }
 
     if (g_excFromUserMode[ArchCurrCpuid()] == TRUE) {
+		//用户空间的情况下
         runProcess = OsCurrProcessGet();
         runspace = runProcess->vmSpace;
         if (runspace == NULL) {
             return FALSE;
         }
 
+		//查询其对应的物理地址
         if (LOS_ArchMmuQuery(&runspace->archMmu, regFP, &paddr, NULL) != LOS_OK) {
             return FALSE;
         }
 
+		//换算成内核虚拟地址
         kvaddr = (PADDR_T)(UINTPTR)LOS_PaddrToKVaddr(paddr);
     }
     if (vaddr != NULL) {
-        *vaddr = kvaddr;
+        *vaddr = kvaddr;   //记录下内核虚拟地址
     }
 
-    return TRUE;
+    return TRUE;  //合法的FP
 }
 
+//寻找合适的栈，成功返回TRUE，失败返回FALSE
+//并返回栈顶，栈底，和FP地址
 STATIC INLINE BOOL FindSuitableStack(UINTPTR regFP, UINTPTR *start, UINTPTR *end, vaddr_t *vaddr)
 {
     UINT32 index, stackStart, stackEnd;
@@ -653,6 +667,7 @@ STATIC INLINE BOOL FindSuitableStack(UINTPTR regFP, UINTPTR *start, UINTPTR *end
     vaddr_t kvaddr;
 
     if (g_excFromUserMode[ArchCurrCpuid()] == TRUE) {
+		//用户态线程对应的栈
         taskCB = OsCurrTaskGet();
         stackStart = taskCB->userMapBase;
         stackEnd = taskCB->userMapBase + taskCB->userMapSize;
@@ -664,6 +679,7 @@ STATIC INLINE BOOL FindSuitableStack(UINTPTR regFP, UINTPTR *start, UINTPTR *end
     }
 
     /* Search in the task stacks */
+	//遍历内核态线程栈
     for (index = 0; index < g_taskMaxNum; index++) {
         taskCB = &g_taskCBArray[index];
         if (OsTaskIsUnused(taskCB)) {
@@ -679,9 +695,11 @@ STATIC INLINE BOOL FindSuitableStack(UINTPTR regFP, UINTPTR *start, UINTPTR *end
     }
 
     /* Search in the exc stacks */
+	//遍历异常处理栈
     for (index = 0; index < sizeof(g_excStack) / sizeof(StackInfo); index++) {
         stack = &g_excStack[index];
         stackStart = (UINTPTR)stack->stackTop;
+		//所有CPU共享异常栈
         stackEnd = stackStart + LOSCFG_KERNEL_CORE_NUM * stack->stackSize;
         if (IsValidFP(regFP, stackStart, stackEnd, &kvaddr) == TRUE) {
             found = TRUE;
@@ -699,6 +717,8 @@ FOUND:
     return found;
 }
 
+
+//栈回溯
 VOID BackTraceSub(UINTPTR regFP)
 {
     UINTPTR tmpFP, backLR;
@@ -757,6 +777,7 @@ VOID BackTrace(UINT32 regFP)
     BackTraceSub(regFP);
 }
 
+//初始化各异常处理的任务栈
 VOID OsExcInit(VOID)
 {
     OsExcStackInfoReg(g_excStack, sizeof(g_excStack) / sizeof(g_excStack[0]));

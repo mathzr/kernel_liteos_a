@@ -262,6 +262,7 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
     OsHwiInit();  //硬件中断框架初始化
 #endif
 
+	//系统异常时，受限shell模块的相关初始化
     OsExcInit();
 
     ret = OsTickInit(g_sysClock, LOSCFG_BASE_CORE_TICK_PER_SECOND);
