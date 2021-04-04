@@ -990,6 +990,7 @@ LOS_ERREND:
     return errRet;
 }
 
+//创建任务
 LITE_OS_SEC_TEXT_INIT UINT32 LOS_TaskCreate(UINT32 *taskID, TSK_INIT_PARAM_S *initParam)
 {
     UINT32 ret;
@@ -1001,22 +1002,29 @@ LITE_OS_SEC_TEXT_INIT UINT32 LOS_TaskCreate(UINT32 *taskID, TSK_INIT_PARAM_S *in
     }
 
     if (OS_INT_ACTIVE) {
+		//中断上下文不能创建任务
         return LOS_ERRNO_TSK_YIELD_IN_INT;
     }
 
     if (initParam->uwResved & OS_TASK_FLAG_IDLEFLAG) {
+		//idle任务归属在idle进程
         initParam->processID = OsGetIdleProcessID();
     } else if (OsProcessIsUserMode(OsCurrProcessGet())) {
+    	//用户态创建线程应该调用另外的函数OsCreateUserTask，
+    	//如果误调用到这里来了
+    	//那么就将其放入KProcess进程下面吧
         initParam->processID = OsGetKernelInitProcessID();
     } else {
+		//内核态进程内创建线程
         initParam->processID = OsCurrProcessGet()->processID;
     }
-    initParam->uwResved &= ~OS_TASK_FLAG_IDLEFLAG;
-    initParam->uwResved &= ~OS_TASK_FLAG_PTHREAD_JOIN;
+    initParam->uwResved &= ~OS_TASK_FLAG_IDLEFLAG;  //idle标记不再需要
+    initParam->uwResved &= ~OS_TASK_FLAG_PTHREAD_JOIN; //只需要用LOS_TASK_STATUS_DETACHED识别即可
     if (initParam->uwResved & LOS_TASK_STATUS_DETACHED) {
-        initParam->uwResved = OS_TASK_FLAG_DETACHED;
+        initParam->uwResved = OS_TASK_FLAG_DETACHED;  //自删除标记
     }
 
+	//创建任务
     ret = LOS_TaskCreateOnly(taskID, initParam);
     if (ret != LOS_OK) {
         return ret;
@@ -1024,20 +1032,23 @@ LITE_OS_SEC_TEXT_INIT UINT32 LOS_TaskCreate(UINT32 *taskID, TSK_INIT_PARAM_S *in
     taskCB = OS_TCB_FROM_TID(*taskID);
 
     SCHEDULER_LOCK(intSave);
-    taskCB->taskStatus &= ~OS_TASK_STATUS_INIT;
-    OS_TASK_SCHED_QUEUE_ENQUEUE(taskCB, 0);
+	//让创建好的任务参与调度
+    taskCB->taskStatus &= ~OS_TASK_STATUS_INIT; //不再是初始状态
+    OS_TASK_SCHED_QUEUE_ENQUEUE(taskCB, 0); //进入调度队列，并置就绪状态
     SCHEDULER_UNLOCK(intSave);
 
     /* in case created task not running on this core,
        schedule or not depends on other schedulers status. */
-    LOS_MpSchedule(OS_MP_CPU_ALL);
+    LOS_MpSchedule(OS_MP_CPU_ALL);  //TBD
     if (OS_SCHEDULER_ACTIVE) {
-        LOS_Schedule();
+        LOS_Schedule();  //也许新创建的任务优先级比较高，可以让其抢占当前任务
     }
 
     return LOS_OK;
 }
 
+
+//唤醒指定的任务
 LITE_OS_SEC_TEXT_INIT UINT32 LOS_TaskResume(UINT32 taskID)
 {
     UINT32 intSave;
@@ -1054,22 +1065,26 @@ LITE_OS_SEC_TEXT_INIT UINT32 LOS_TaskResume(UINT32 taskID)
     SCHEDULER_LOCK(intSave);
 
     /* clear pending signal */
+	//清除任务已挂起的信号
     taskCB->signal &= ~SIGNAL_SUSPEND;
 
     tempStatus = taskCB->taskStatus;
     if (tempStatus & OS_TASK_STATUS_UNUSED) {
+		//任务不存在
         errRet = LOS_ERRNO_TSK_NOT_CREATED;
         OS_GOTO_ERREND();
     } else if (!(tempStatus & OS_TASK_STATUS_SUSPEND)) {
+		//只能唤醒SUSPEND状态的任务
         errRet = LOS_ERRNO_TSK_NOT_SUSPENDED;
         OS_GOTO_ERREND();
     }
 
-    taskCB->taskStatus &= ~OS_TASK_STATUS_SUSPEND;
+    taskCB->taskStatus &= ~OS_TASK_STATUS_SUSPEND; //清除SUSPEND状态
     if (!(taskCB->taskStatus & OS_CHECK_TASK_BLOCK)) {
+		//如果任务没有等待其它资源，那么唤醒它，使其就绪
         OS_TASK_SCHED_QUEUE_ENQUEUE(taskCB, OS_PROCESS_STATUS_PEND);
         if (OS_SCHEDULER_ACTIVE) {
-            needSched = TRUE;
+            needSched = TRUE;  //如果当前CPU能调度的话，则触发调度逻辑
         }
     }
 
@@ -1077,7 +1092,7 @@ LITE_OS_SEC_TEXT_INIT UINT32 LOS_TaskResume(UINT32 taskID)
 
     if (needSched) {
         LOS_MpSchedule(OS_MP_CPU_ALL);
-        LOS_Schedule();
+        LOS_Schedule();  //被唤醒的任务可能优先级较高，给其抢占当前任务的机会
     }
 
     return LOS_OK;
@@ -1096,6 +1111,7 @@ LOS_ERREND:
  * 3. Do the suspension in hard-irq
  * then LOS_TaskSuspend will directly return with 'ret' value.
  */
+ //对正在运行的任务做挂起操作前的检查
 LITE_OS_SEC_TEXT_INIT STATIC BOOL OsTaskSuspendCheckOnRun(LosTaskCB *taskCB, UINT32 *ret)
 {
     /* init default out return value */
