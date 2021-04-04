@@ -728,6 +728,7 @@ VOID BackTraceSub(UINTPTR regFP)
     LosVmMapRegion *region = NULL;
     VADDR_T kvaddr;
 
+	//根据FP的值找到合适的栈(进程栈，内核线程栈，异常处理栈)
     if (FindSuitableStack(regFP, &stackStart, &stackEnd, &kvaddr) == FALSE) {
         PrintExcInfo("traceback error fp = 0x%x\n", regFP);
         return;
@@ -739,6 +740,7 @@ VOID BackTraceSub(UINTPTR regFP)
      * there's no function call, and compiler will not store the link register, but the frame pointer
      * will still be stored and updated. In that case we needs to find the right position of frame pointer.
      */
+     //通过栈中保存的LR寄存器找出函数调用链
     tmpFP = *(UINTPTR *)(UINTPTR)kvaddr;
     if (IsValidFP(tmpFP, stackStart, stackEnd, NULL) == TRUE) {
         backFP = tmpFP;
@@ -747,16 +749,17 @@ VOID BackTraceSub(UINTPTR regFP)
 
     while (IsValidFP(backFP, stackStart, stackEnd, &kvaddr) == TRUE) {
         tmpFP = backFP;
-        backLR = *(UINTPTR *)(UINTPTR)kvaddr;
+        backLR = *(UINTPTR *)(UINTPTR)kvaddr;  //上一级调用者函数保存的LR
         if (IsValidFP(tmpFP - POINTER_SIZE, stackStart, stackEnd, &kvaddr) == FALSE) {
             PrintExcInfo("traceback backFP check failed, backFP: 0x%x\n", tmpFP - POINTER_SIZE);
             return;
         }
-        backFP = *(UINTPTR *)(UINTPTR)kvaddr;
+        backFP = *(UINTPTR *)(UINTPTR)kvaddr; //上一级调用者函数保存的FP
         if (LOS_IsUserAddress((VADDR_T)backLR) == TRUE) {
             region = LOS_RegionFind(OsCurrProcessGet()->vmSpace, (VADDR_T)backLR);
         }
         if (region != NULL) {
+			//当前函数调用对应的几个重要寄存器值
             PrintExcInfo("traceback %u -- lr = 0x%x    fp = 0x%x lr in %s --> 0x%x\n", count, backLR, backFP,
                          OsGetRegionNameOrFilePath(region), backLR - region->range.base);
             region = NULL;
@@ -813,12 +816,13 @@ VOID OsExcHook(UINT32 excType, ExcContext *excBufAddr, UINT32 far, UINT32 fsr)
     (VOID)OsShellCmdMemCheck(0, NULL);  //内存泄露等检查
 
 #ifdef LOSCFG_COREDUMP
-    LOS_CoreDumpV2(excType, excBufAddr);
+    LOS_CoreDumpV2(excType, excBufAddr); //进程core dump处理
 #endif
 
-    OsUserExcHandle(excBufAddr); //xxx
+    OsUserExcHandle(excBufAddr); //处理用户态异常
 }
 
+//输出异常处理时当前任务栈的信息
 VOID OsCallStackInfo(VOID)
 {
     UINT32 count = 0;
@@ -881,14 +885,14 @@ VOID OsUndefIncExcHandleEntry(ExcContext *excBufAddr)
     excBufAddr->PC -= 4;  /* lr in undef is pc + 4 */
 
     if (gdb_undef_hook(excBufAddr, OS_EXCEPT_UNDEF_INSTR)) {
-        return;
+        return;  //gdb接管
     }
 
     if (g_excHook != NULL) {
         /* far, fsr are unused in exc type of OS_EXCEPT_UNDEF_INSTR */
-        g_excHook(OS_EXCEPT_UNDEF_INSTR, excBufAddr, 0, 0);
+        g_excHook(OS_EXCEPT_UNDEF_INSTR, excBufAddr, 0, 0);  //未定义指令异常的处理钩子
     }
-    while (1) {}
+    while (1) {}  //如果到这里，CPU就挂住了
 }
 
 #if __LINUX_ARM_ARCH__ >= 7
@@ -900,13 +904,13 @@ VOID OsPrefetchAbortExcHandleEntry(ExcContext *excBufAddr)
     excBufAddr->PC -= 4;  /* lr in prefetch abort is pc + 4 */
 
     if (gdbhw_hook(excBufAddr, OS_EXCEPT_PREFETCH_ABORT)) {
-        return;
+        return;  //gdb接管
     }
 
     if (g_excHook != NULL) {
         far = OsArmReadIfar();
         fsr = OsArmReadIfsr();
-        g_excHook(OS_EXCEPT_PREFETCH_ABORT, excBufAddr, far, fsr);
+        g_excHook(OS_EXCEPT_PREFETCH_ABORT, excBufAddr, far, fsr);  //取指令异常
     }
     while (1) {}
 }
@@ -936,6 +940,7 @@ VOID OsDataAbortExcHandleEntry(ExcContext *excBufAddr)
 #define EXC_WAIT_INTER 50U
 #define EXC_WAIT_TIME  2000U
 
+//所有CPU的状态
 STATIC VOID OsAllCpuStatusOutput(VOID)
 {
     UINT32 i;
@@ -955,9 +960,11 @@ STATIC VOID OsAllCpuStatusOutput(VOID)
                 break;
         }
     }
+	//当前正在处理的CPU编号是
     PrintExcInfo("The current handling the exception is cpu%u !\n", ArchCurrCpuid());
 }
 
+//等所有CPU都停下来
 STATIC VOID WaitAllCpuStop(UINT32 cpuID)
 {
     UINT32 i;
@@ -966,14 +973,14 @@ STATIC VOID WaitAllCpuStop(UINT32 cpuID)
     while (time < EXC_WAIT_TIME) {
         for (i = 0; i < LOSCFG_KERNEL_CORE_NUM; i++) {
             if ((i != cpuID) && (g_percpu[i].excFlag != CPU_HALT)) {
-                LOS_Mdelay(EXC_WAIT_INTER);
-                time += EXC_WAIT_INTER;
+                LOS_Mdelay(EXC_WAIT_INTER); //等其它CPU处于HALT状态
+                time += EXC_WAIT_INTER;  //统计已等待时间，继续等
                 break;
             }
         }
         /* Other CPUs are all haletd or in the exc. */
         if (i == LOSCFG_KERNEL_CORE_NUM) {
-            break;
+            break;  //其它cpu都halt了
         }
     }
     return;

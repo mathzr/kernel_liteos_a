@@ -78,32 +78,44 @@ extern "C" {
 #error "task maxnum cannot be zero"
 #endif  /* LOSCFG_BASE_CORE_TSK_LIMIT <= 0 */
 
+//任务控制块数组
 LITE_OS_SEC_BSS LosTaskCB    *g_taskCBArray;
+//空闲任务队列
 LITE_OS_SEC_BSS LOS_DL_LIST  g_losFreeTask;
+//待回收任务队列
 LITE_OS_SEC_BSS LOS_DL_LIST  g_taskRecyleList;
+//总的任务数目
 LITE_OS_SEC_BSS UINT32       g_taskMaxNum;
+//参与任务调度的cpu位图
 LITE_OS_SEC_BSS UINT32       g_taskScheduled; /* one bit for each cores */
+//回收僵尸任务事件
 LITE_OS_SEC_BSS EVENT_CB_S   g_resourceEvent;
 /* spinlock for task module, only available on SMP mode */
+//任务模块的自旋锁
 LITE_OS_SEC_BSS SPIN_LOCK_INIT(g_taskSpin);
 
+//这个函数弱引用OsSetConsoleID
 STATIC VOID OsConsoleIDSetHook(UINT32 param1,
                                UINT32 param2) __attribute__((weakref("OsSetConsoleID")));
+//这个函数弱引用OsExcStackCheck
 STATIC VOID OsExcStackCheckHook(VOID) __attribute__((weakref("OsExcStackCheck")));
 
+//任务处于下述3种状态之一都认为是阻塞态
 #define OS_CHECK_TASK_BLOCK (OS_TASK_STATUS_DELAY |    \
                              OS_TASK_STATUS_PEND |     \
                              OS_TASK_STATUS_SUSPEND)
 
 /* temp task blocks for booting procedure */
+//将启动过程包装成一个任务，每个CPU都有启动过程，所以每个CPU对应一个任务
 LITE_OS_SEC_BSS STATIC LosTaskCB                g_mainTask[LOSCFG_KERNEL_CORE_NUM];
 
+//当前CPU对应的启动任务
 VOID* OsGetMainTask()
 {
     return (g_mainTask + ArchCurrCpuid());
 }
 
-//为每个CPU核初始化main线程
+//为每个CPU核初始化启动线程
 VOID OsSetMainTask()
 {
     UINT32 i;
@@ -124,16 +136,17 @@ VOID OsSetMainTask()
     }
 }
 
+//空闲任务的处理逻辑
 LITE_OS_SEC_TEXT WEAK VOID OsIdleTask(VOID)
 {
     while (1) {
 #ifdef LOSCFG_KERNEL_TICKLESS
-        if (OsTickIrqFlagGet()) {
-            OsTickIrqFlagSet(0);
-            OsTicklessStart();
+        if (OsTickIrqFlagGet()) {  //检查是否需要进入tickless
+            OsTickIrqFlagSet(0);   //关闭时钟中断
+            OsTicklessStart();     //启动tickless
         }
 #endif
-        Wfi();
+        Wfi();    //等待下一次中断唤醒
     }
 }
 
@@ -142,6 +155,7 @@ LITE_OS_SEC_TEXT WEAK VOID OsIdleTask(VOID)
  * Input       : taskCB    --- task control block
  *               priority  --- priority
  */
+ //修订任务的优先级
 LITE_OS_SEC_TEXT_MINOR VOID OsTaskPriModify(LosTaskCB *taskCB, UINT16 priority)
 {
     LosProcessCB *processCB = NULL;
@@ -149,89 +163,113 @@ LITE_OS_SEC_TEXT_MINOR VOID OsTaskPriModify(LosTaskCB *taskCB, UINT16 priority)
     LOS_ASSERT(LOS_SpinHeld(&g_taskSpin));
 
     if (taskCB->taskStatus & OS_TASK_STATUS_READY) {
-        processCB = OS_PCB_FROM_PID(taskCB->processID);
-        OS_TASK_PRI_QUEUE_DEQUEUE(processCB, taskCB);
-        taskCB->priority = priority;
-        OS_TASK_PRI_QUEUE_ENQUEUE(processCB, taskCB);
+		//原来已经在就绪队列，则需要从一个就绪队列移动到另一个就绪队列
+        processCB = OS_PCB_FROM_PID(taskCB->processID);  
+        OS_TASK_PRI_QUEUE_DEQUEUE(processCB, taskCB); //从就绪队列移除  
+        taskCB->priority = priority;  //修订优先级
+        OS_TASK_PRI_QUEUE_ENQUEUE(processCB, taskCB); //移动到新的就绪队列
     } else {
+		//原来不在就绪队列，直接修订优先级即可，下次放入就绪队列时，能放入合适的队列
         taskCB->priority = priority;
     }
 }
 
+//将当前任务加入超时队列
 LITE_OS_SEC_TEXT STATIC INLINE VOID OsAdd2TimerList(LosTaskCB *taskCB, UINT32 timeOut)
 {
-    SET_SORTLIST_VALUE(&taskCB->sortList, timeOut);
-    OsAdd2SortLink(&OsPercpuGet()->taskSortLink, &taskCB->sortList);
+    SET_SORTLIST_VALUE(&taskCB->sortList, timeOut); //设置超时时间
+    OsAdd2SortLink(&OsPercpuGet()->taskSortLink, &taskCB->sortList);  //放入超时队列
 #if (LOSCFG_KERNEL_SMP == YES)
-    taskCB->timerCpu = ArchCurrCpuid();
+    taskCB->timerCpu = ArchCurrCpuid();  //记录为当前任务进行计时的CPU
 #endif
 }
 
+//将当前任务从超时队列移除
 LITE_OS_SEC_TEXT STATIC INLINE VOID OsTimerListDelete(LosTaskCB *taskCB)
 {
+//每个cpu都有一个独立计时装置
 #if (LOSCFG_KERNEL_SMP == YES)
     SortLinkAttribute *sortLinkHeader = &g_percpu[taskCB->timerCpu].taskSortLink;
 #else
     SortLinkAttribute *sortLinkHeader = &g_percpu[0].taskSortLink;
 #endif
+	//从超时队列移除任务
     OsDeleteSortLink(sortLinkHeader, &taskCB->sortList);
 }
 
+//将任务放入空闲队列
 STATIC INLINE VOID OsInsertTCBToFreeList(LosTaskCB *taskCB)
 {
     UINT32 taskID = taskCB->taskID;
+	//清空任务描述符
     (VOID)memset_s(taskCB, sizeof(LosTaskCB), 0, sizeof(LosTaskCB));
-    taskCB->taskID = taskID;
-    taskCB->taskStatus = OS_TASK_STATUS_UNUSED;
-    taskCB->processID = OS_INVALID_VALUE;
-    LOS_ListAdd(&g_losFreeTask, &taskCB->pendList);
+    taskCB->taskID = taskID;  //任务ID保持原值
+    taskCB->taskStatus = OS_TASK_STATUS_UNUSED; //空闲任务
+    taskCB->processID = OS_INVALID_VALUE;  //不属于任何进程
+    LOS_ListAdd(&g_losFreeTask, &taskCB->pendList); //放入空闲队列
 }
 
+//唤醒等待此任务删除的任务
 LITE_OS_SEC_TEXT_INIT VOID OsTaskJoinPostUnsafe(LosTaskCB *taskCB)
 {
     LosTaskCB *resumedTask = NULL;
 
     if (taskCB->taskStatus & OS_TASK_FLAG_PTHREAD_JOIN) {
+		//我允许其它任务来等待删除
         if (!LOS_ListEmpty(&taskCB->joinList)) {
+			//如果当前有任务在等待我删除
+			//那么找出这个任务
             resumedTask = OS_TCB_FROM_PENDLIST(LOS_DL_LIST_FIRST(&(taskCB->joinList)));
-            OsTaskWake(resumedTask);
+            OsTaskWake(resumedTask); //并唤醒它
         }
+		//我不再允许其它任务来等到我删除
         taskCB->taskStatus &= ~OS_TASK_FLAG_PTHREAD_JOIN;
     }
+	//标记我为退出状态
     taskCB->taskStatus |= OS_TASK_STATUS_EXIT;
 }
 
+//等待指定任务的退出
 LITE_OS_SEC_TEXT UINT32 OsTaskJoinPendUnsafe(LosTaskCB *taskCB)
 {
+	//此任务对应的进程
     LosProcessCB *processCB = OS_PCB_FROM_PID(taskCB->processID);
     if (!(processCB->processStatus & OS_PROCESS_STATUS_RUNNING)) {
-        return LOS_EPERM;
+        return LOS_EPERM;  //如果此进程没有任务在运行，那么不允许等待它
     }
 
     if (taskCB->taskStatus & OS_TASK_STATUS_INIT) {
-        return LOS_EINVAL;
+        return LOS_EINVAL;  //被等待的任务还没有ready
     }
 
     if ((taskCB->taskStatus & OS_TASK_FLAG_PTHREAD_JOIN) && LOS_ListEmpty(&taskCB->joinList)) {
+		//此任务运行被等待，且现在没有其它任务在等待它，
+		//那么我们可以等待它退出
         return OsTaskWait(&taskCB->joinList, LOS_WAIT_FOREVER, TRUE);
     } else if (taskCB->taskStatus & OS_TASK_STATUS_EXIT) {
+    	//如果被等待的任务已退出，那么我们直接返回，没有必要等待了
         return LOS_OK;
     }
 
     return LOS_EINVAL;
 }
 
+//设置线程为子删除，而不是其它线程来等待我删除，对应pthread_detach
 LITE_OS_SEC_TEXT UINT32 OsTaskSetDeatchUnsafe(LosTaskCB *taskCB)
 {
     LosProcessCB *processCB = OS_PCB_FROM_PID(taskCB->processID);
     if (!(processCB->processStatus & OS_PROCESS_STATUS_RUNNING)) {
-        return LOS_EPERM;
+        return LOS_EPERM; //对应进程需要处于运行态
     }
 
     if (taskCB->taskStatus & OS_TASK_FLAG_PTHREAD_JOIN) {
+		//如果线程运行pthread_join
         if (LOS_ListEmpty(&(taskCB->joinList))) {
+			//且当前其它线程没有join
             LOS_ListDelete(&(taskCB->joinList));
+			//那么设置成不允许join
             taskCB->taskStatus &= ~OS_TASK_FLAG_PTHREAD_JOIN;
+			//并设置成detach状态，即结束后自行删除，不由其它线程辅助删除
             taskCB->taskStatus |= OS_TASK_FLAG_DETACHED;
             return LOS_OK;
         }
@@ -242,6 +280,8 @@ LITE_OS_SEC_TEXT UINT32 OsTaskSetDeatchUnsafe(LosTaskCB *taskCB)
     return LOS_EINVAL;
 }
 
+//判断线程等待的超时时间是否到达，本函数每个tick调用1次
+//本函数在中断上下文执行
 LITE_OS_SEC_TEXT VOID OsTaskScan(VOID)
 {
     SortLinkList *sortList = NULL;
@@ -251,9 +291,10 @@ LITE_OS_SEC_TEXT VOID OsTaskScan(VOID)
     LOS_DL_LIST *listObject = NULL;
     SortLinkAttribute *taskSortLink = NULL;
 
-    taskSortLink = &OsPercpuGet()->taskSortLink;
+    taskSortLink = &OsPercpuGet()->taskSortLink;  //当前CPU的计时模块
+    //每个tick, 逻辑上的钟表(想象墙上的钟表)往前走动1个刻度(即1个tick, 目前是10毫秒)
     taskSortLink->cursor = (taskSortLink->cursor + 1) & OS_TSK_SORTLINK_MASK;
-    listObject = taskSortLink->sortLink + taskSortLink->cursor;
+    listObject = taskSortLink->sortLink + taskSortLink->cursor;  //与本刻度相关的超时任务队列
 
     /*
      * When task is pended with timeout, the task block is on the timeout sortlink
@@ -263,87 +304,111 @@ LITE_OS_SEC_TEXT VOID OsTaskScan(VOID)
      * Now synchronize sortlink preocedure is used, therefore the whole task scan needs
      * to be protected, preventing another core from doing sortlink deletion at same time.
      */
-    LOS_SpinLock(&g_taskSpin);
+     //大致翻译一下上述注释。任务在等待其它资源的同时(信号量，事件组，互斥锁等)，也可以设置超时时间。
+     //不管是超时时间先到，还是等待的资源先到，都可以唤醒任务
+    LOS_SpinLock(&g_taskSpin);  //因为多个CPU都会访问到同样的任务描述符，所以这里需要保护起来
+    //特别是这里的代码会让任务从超时队列移除，以及遍历超时队列
 
     if (LOS_ListEmpty(listObject)) {
-        LOS_SpinUnlock(&g_taskSpin);
+        LOS_SpinUnlock(&g_taskSpin);  //当前刻度没有对应的任务在等待
         return;
     }
+	//取出当前刻度第一个等待的任务
     sortList = LOS_DL_LIST_ENTRY(listObject->pstNext, SortLinkList, sortLinkNode);
+	//减少其等待的时间值，距离上次调整，刻度已经走了1圈，所以这里圈数减1。
     ROLLNUM_DEC(sortList->idxRollNum);
 
     while (ROLLNUM(sortList->idxRollNum) == 0) {
-        LOS_ListDelete(&sortList->sortLinkNode);
+		//剩余圈数(还需要等待的圈数)为0，表明这个任务超时了，后续的任务都要观察剩余圈数是否为0，如果是，则超时了。
+        LOS_ListDelete(&sortList->sortLinkNode);  //从当前刻度移除这个任务
         taskCB = LOS_DL_LIST_ENTRY(sortList, LosTaskCB, sortList);
-        taskCB->taskStatus &= ~OS_TASK_STATUS_PEND_TIME;
-        tempStatus = taskCB->taskStatus;
-        if (tempStatus & OS_TASK_STATUS_PEND) {
+        taskCB->taskStatus &= ~OS_TASK_STATUS_PEND_TIME;  //任务不再等待时间资源
+        tempStatus = taskCB->taskStatus;  //记录任务的当前状态
+        if (tempStatus & OS_TASK_STATUS_PEND) {  
+			//如果任务还有在等待其它资源，那么也没有必要等待了，因为超时了
             taskCB->taskStatus &= ~OS_TASK_STATUS_PEND;
 #if (LOSCFG_KERNEL_LITEIPC == YES)
-            taskCB->ipcStatus &= ~IPC_THREAD_STATUS_PEND;
+			//消息队列接收超时，那么没有必要再等对方发消息了
+            taskCB->ipcStatus &= ~IPC_THREAD_STATUS_PEND;  
 #endif
-            taskCB->taskStatus |= OS_TASK_STATUS_TIMEOUT;
-            LOS_ListDelete(&taskCB->pendList);
-            taskCB->taskSem = NULL;
-            taskCB->taskMux = NULL;
+			//记录当前任务属于等待某种资源超时状态
+            taskCB->taskStatus |= OS_TASK_STATUS_TIMEOUT; 
+            LOS_ListDelete(&taskCB->pendList);  //从等待队列中移除(不再等待那个资源)
+            taskCB->taskSem = NULL;   //不等待信号量
+            taskCB->taskMux = NULL;   //不等待互斥锁，
+            // 线程在等待某种资源时，已经挂起，不存在同时等待多个资源的情况
         } else {
+        	// 没有等待其他资源，但只等待了时间资源，即sleep睡眠的情况
+        	// 这里表示sleep结束，需要唤醒任务了，先清除任务delay标志
             taskCB->taskStatus &= ~OS_TASK_STATUS_DELAY;
         }
 
+		//强制挂起的任务只能通过对应的唤醒函数强制唤醒，不通过其他方式唤醒
         if (!(tempStatus & OS_TASK_STATUS_SUSPEND)) {
+			//任务不是强制挂起的情况下，放入就绪队列
             OS_TASK_SCHED_QUEUE_ENQUEUE(taskCB, OS_PROCESS_STATUS_PEND);
+			//并记录下来，后续使用调度器来调度任务
             needSchedule = TRUE;
         }
 
         if (LOS_ListEmpty(listObject)) {
-            break;
+            break;  //当前刻度没有任务等待了
         }
 
+		//当前事件刻度上的下一个等待任务
         sortList = LOS_DL_LIST_ENTRY(listObject->pstNext, SortLinkList, sortLinkNode);
     }
 
+	//当前刻度遍历完成，或者当前刻度剩余的任务都还没有超时
     LOS_SpinUnlock(&g_taskSpin);
 
     if (needSchedule != FALSE) {
         LOS_MpSchedule(OS_MP_CPU_ALL);
-        LOS_Schedule();
+		//也许刚唤醒的一些任务里面存在优先级较高的任务，可以选择其先运行
+		//这里就有一个内核抢占的味道了
+        LOS_Schedule();  
     }
 }
 
+
+//初始化任务管理模块
 LITE_OS_SEC_TEXT_INIT UINT32 OsTaskInit(VOID)
 {
     UINT32 index;
     UINT32 ret;
     UINT32 size;
 
+	//任务总数(不含mainTask，即mainTask独立于这里的任务列表)
     g_taskMaxNum = LOSCFG_BASE_CORE_TSK_LIMIT;
-    size = (g_taskMaxNum + 1) * sizeof(LosTaskCB);
+    size = (g_taskMaxNum + 1) * sizeof(LosTaskCB);  //额外多申请一个任务控制块
     /*
      * This memory is resident memory and is used to save the system resources
      * of task control block and will not be freed.
      */
+     //任务控制块一旦申请，不再释放
     g_taskCBArray = (LosTaskCB *)LOS_MemAlloc(m_aucSysMem0, size);
     if (g_taskCBArray == NULL) {
         return LOS_ERRNO_TSK_NO_MEMORY;
     }
     (VOID)memset_s(g_taskCBArray, size, 0, size);
 
-    LOS_ListInit(&g_losFreeTask);
-    LOS_ListInit(&g_taskRecyleList);
+    LOS_ListInit(&g_losFreeTask);  //空闲任务队列
+    LOS_ListInit(&g_taskRecyleList); //待回收任务队列
     for (index = 0; index < g_taskMaxNum; index++) {
-        g_taskCBArray[index].taskStatus = OS_TASK_STATUS_UNUSED;
-        g_taskCBArray[index].taskID = index;
-        LOS_ListTailInsert(&g_losFreeTask, &g_taskCBArray[index].pendList);
+        g_taskCBArray[index].taskStatus = OS_TASK_STATUS_UNUSED; //标记每个任务为空闲状态
+        g_taskCBArray[index].taskID = index;  //设置每个任务ID为其在数组中的位置
+        LOS_ListTailInsert(&g_losFreeTask, &g_taskCBArray[index].pendList); //将任务存入空闲队列
     }
 
-    ret = OsPriQueueInit();
+    ret = OsPriQueueInit();  //任务调度优先级队列初始化
     if (ret != LOS_OK) {
         return LOS_ERRNO_TSK_NO_MEMORY;
     }
 
     /* init sortlink for each core */
+	//每个CPU核都有一个计时装置
     for (index = 0; index < LOSCFG_KERNEL_CORE_NUM; index++) {
-        ret = OsSortLinkInit(&g_percpu[index].taskSortLink);
+        ret = OsSortLinkInit(&g_percpu[index].taskSortLink); //初始化计时装置，用于任务相关的计时
         if (ret != LOS_OK) {
             return LOS_ERRNO_TSK_NO_MEMORY;
         }
@@ -351,30 +416,32 @@ LITE_OS_SEC_TEXT_INIT UINT32 OsTaskInit(VOID)
     return LOS_OK;
 }
 
+//获取idle任务id
 UINT32 OsGetIdleTaskId(VOID)
 {
     Percpu *perCpu = OsPercpuGet();
     return perCpu->idleTaskID;
 }
 
+//创建idle任务
 LITE_OS_SEC_TEXT_INIT UINT32 OsIdleTaskCreate(VOID)
 {
     UINT32 ret;
     TSK_INIT_PARAM_S taskInitParam;
     Percpu *perCpu = OsPercpuGet();
-    UINT32 *idleTaskID = &perCpu->idleTaskID;
+    UINT32 *idleTaskID = &perCpu->idleTaskID;  //每个CPU都有一个idle任务
 
     (VOID)memset_s((VOID *)(&taskInitParam), sizeof(TSK_INIT_PARAM_S), 0, sizeof(TSK_INIT_PARAM_S));
     taskInitParam.pfnTaskEntry = (TSK_ENTRY_FUNC)OsIdleTask;
-    taskInitParam.uwStackSize = LOSCFG_BASE_CORE_TSK_IDLE_STACK_SIZE;
+    taskInitParam.uwStackSize = LOSCFG_BASE_CORE_TSK_IDLE_STACK_SIZE;  //idle任务只需要比较小的栈
     taskInitParam.pcName = "Idle";
-    taskInitParam.usTaskPrio = OS_TASK_PRIORITY_LOWEST;
-    taskInitParam.uwResved = OS_TASK_FLAG_IDLEFLAG;
+    taskInitParam.usTaskPrio = OS_TASK_PRIORITY_LOWEST;  //只需要比较低的优先级
+    taskInitParam.uwResved = OS_TASK_FLAG_IDLEFLAG;  //idle任务标记
 #if (LOSCFG_KERNEL_SMP == YES)
-    taskInitParam.usCpuAffiMask = CPUID_TO_AFFI_MASK(ArchCurrCpuid());
+    taskInitParam.usCpuAffiMask = CPUID_TO_AFFI_MASK(ArchCurrCpuid());  //每个idle任务只在1个cpu上运行
 #endif
-    ret = LOS_TaskCreate(idleTaskID, &taskInitParam);
-    OS_TCB_FROM_TID(*idleTaskID)->taskStatus |= OS_TASK_FLAG_SYSTEM_TASK;
+    ret = LOS_TaskCreate(idleTaskID, &taskInitParam);  //创建idle任务
+    OS_TCB_FROM_TID(*idleTaskID)->taskStatus |= OS_TASK_FLAG_SYSTEM_TASK; //idle任务是系统任务
 
     return ret;
 }
@@ -383,6 +450,7 @@ LITE_OS_SEC_TEXT_INIT UINT32 OsIdleTaskCreate(VOID)
  * Description : get id of current running task.
  * Return      : task id
  */
+ //获取当前任务ID
 LITE_OS_SEC_TEXT UINT32 LOS_CurTaskIDGet(VOID)
 {
     LosTaskCB *runTask = OsCurrTaskGet();
@@ -394,38 +462,44 @@ LITE_OS_SEC_TEXT UINT32 LOS_CurTaskIDGet(VOID)
 }
 
 #if (LOSCFG_BASE_CORE_TSK_MONITOR == YES)
+//任务切换时对栈进行检查
 LITE_OS_SEC_TEXT STATIC VOID OsTaskStackCheck(LosTaskCB *oldTask, LosTaskCB *newTask)
 {
     if (!OS_STACK_MAGIC_CHECK(oldTask->topOfStack)) {
+		//栈顶校验数字被修订，极大可能发生过栈溢出
         LOS_Panic("CURRENT task ID: %s:%d stack overflow!\n", oldTask->taskName, oldTask->taskID);
     }
 
     if (((UINTPTR)(newTask->stackPointer) <= newTask->topOfStack) ||
         ((UINTPTR)(newTask->stackPointer) > (newTask->topOfStack + newTask->stackSize))) {
+        //当前栈顶指针不在栈空间中，也是异常情况
         LOS_Panic("HIGHEST task ID: %s:%u SP error! StackPointer: %p TopOfStack: %p\n",
                   newTask->taskName, newTask->taskID, newTask->stackPointer, newTask->topOfStack);
     }
 
     if (OsExcStackCheckHook != NULL) {
-        OsExcStackCheckHook();
+        OsExcStackCheckHook();  //对异常处理相关的栈也做一个检查
     }
 }
 
 #endif
 
+//任务切换时的检查
 LITE_OS_SEC_TEXT_MINOR UINT32 OsTaskSwitchCheck(LosTaskCB *oldTask, LosTaskCB *newTask)
 {
 #if (LOSCFG_BASE_CORE_TSK_MONITOR == YES)
-    OsTaskStackCheck(oldTask, newTask);
+    OsTaskStackCheck(oldTask, newTask);  //先对栈进行检查
 #endif /* LOSCFG_BASE_CORE_TSK_MONITOR == YES */
 
 #if (LOSCFG_KERNEL_TRACE == YES)
+	//运维记账
     LOS_Trace(LOS_TRACE_SWITCH, newTask->taskID, oldTask->taskID);
 #endif
 
     return LOS_OK;
 }
 
+//任务执行结束后的收尾工作
 LITE_OS_SEC_TEXT VOID OsTaskToExit(LosTaskCB *taskCB, UINT32 status)
 {
     UINT32 intSave;
@@ -433,26 +507,34 @@ LITE_OS_SEC_TEXT VOID OsTaskToExit(LosTaskCB *taskCB, UINT32 status)
     LosTaskCB *mainTask = NULL;
 
     SCHEDULER_LOCK(intSave);
+	//当前进程
     runProcess = OS_PCB_FROM_PID(taskCB->processID);
+	//当前进程的主线程
     mainTask = OS_TCB_FROM_TID(runProcess->threadGroupID);
     SCHEDULER_UNLOCK(intSave);
     if (mainTask == taskCB) {
+		//本线程是主线程
+		//则当前线程退出线程组
         OsTaskExitGroup(status);
     }
 
     SCHEDULER_LOCK(intSave);
     if (runProcess->threadNumber == 1) { /* 1: The last task of the process exits */
         SCHEDULER_UNLOCK(intSave);
+		//进程随最后一个线程的退出而退出
         (VOID)OsProcessExit(taskCB, status);
         return;
     }
 
     if (taskCB->taskStatus & OS_TASK_FLAG_DETACHED) {
+		//自删除线程的删除逻辑
         (VOID)OsTaskDeleteUnsafe(taskCB, status, intSave);
     }
 
+	//也许某线程在等待我退出，这个时候唤醒它
     OsTaskJoinPostUnsafe(taskCB);
-    OsSchedResched();
+	//因为我不能继续运行了，只能选其它任务来运行
+    OsSchedResched();  
     SCHEDULER_UNLOCK(intSave);
     return;
 }
@@ -461,6 +543,7 @@ LITE_OS_SEC_TEXT VOID OsTaskToExit(LosTaskCB *taskCB, UINT32 status)
  * Description : All task entry
  * Input       : taskID     --- The ID of the task to be run
  */
+ //通用的任务处理入口
 LITE_OS_SEC_TEXT_INIT VOID OsTaskEntry(UINT32 taskID)
 {
     LosTaskCB *taskCB = NULL;
@@ -472,19 +555,23 @@ LITE_OS_SEC_TEXT_INIT VOID OsTaskEntry(UINT32 taskID)
      * from interrupt and other cores. release task spinlock and enable
      * interrupt in sequence at the task entry.
      */
-    LOS_SpinUnlock(&g_taskSpin);
-    (VOID)LOS_IntUnLock();
+    LOS_SpinUnlock(&g_taskSpin);  //释放任务调度自旋锁
+    (VOID)LOS_IntUnLock();  //并开中断，
+    //上面的代码可以认为是任务调度逻辑的一部分，下面的代码是任务的业务代码
 
     taskCB = OS_TCB_FROM_TID(taskID);
+	//调用任务处理对应的具体函数，传入约定的参数，获取返回值
     taskCB->joinRetval = taskCB->taskEntry(taskCB->args[0], taskCB->args[1],
                                            taskCB->args[2], taskCB->args[3]); /* 2 & 3: just for args array index */
     if (taskCB->taskStatus & OS_TASK_FLAG_DETACHED) {
-        taskCB->joinRetval = 0;
+        taskCB->joinRetval = 0;  //如果是自删除任务，不关心其处理结果
     }
 
-    OsTaskToExit(taskCB, 0);
+    OsTaskToExit(taskCB, 0);  //任务运行结束，正常退出
 }
 
+
+//创建任务前的参数检查
 LITE_OS_SEC_TEXT_INIT STATIC UINT32 OsTaskCreateParamCheck(const UINT32 *taskID,
     TSK_INIT_PARAM_S *initParam, VOID **pool)
 {
@@ -493,59 +580,74 @@ LITE_OS_SEC_TEXT_INIT STATIC UINT32 OsTaskCreateParamCheck(const UINT32 *taskID,
     *pool = (VOID *)m_aucSysMem1;
 
     if (taskID == NULL) {
+		//必须要能保存创建后的任务ID结果
         return LOS_ERRNO_TSK_ID_INVALID;
     }
 
     if (initParam == NULL) {
+		//必须要指定创建任务的参数
         return LOS_ERRNO_TSK_PTR_NULL;
     }
 
     process = OS_PCB_FROM_PID(initParam->processID);
     if (process->processMode > OS_USER_MODE) {
+		//进程模式非法
         return LOS_ERRNO_TSK_ID_INVALID;
     }
 
     if (!OsProcessIsUserMode(process)) {
+		//内核态进程
         if (initParam->pcName == NULL) {
+			//必须指定任务名称
             return LOS_ERRNO_TSK_NAME_EMPTY;
         }
     }
 
     if (initParam->pfnTaskEntry == NULL) {
+		//必须指定任务处理函数
         return LOS_ERRNO_TSK_ENTRY_NULL;
     }
 
     if (initParam->usTaskPrio > OS_TASK_PRIORITY_LOWEST) {
+		//任务优先级必须合法
         return LOS_ERRNO_TSK_PRIOR_ERROR;
     }
 
 #ifdef LOSCFG_EXC_INTERACTION
     if (!OsExcInteractionTaskCheck(initParam)) {
+		//如果是idle任务或者shell任务，则使用独立的内存池
         *pool = m_aucSysMem0;
         poolSize = OS_EXC_INTERACTMEM_SIZE;
     }
 #endif
     if (initParam->uwStackSize > poolSize) {
+		//指定的栈尺寸过大
         return LOS_ERRNO_TSK_STKSZ_TOO_LARGE;
     }
 
     if (initParam->uwStackSize == 0) {
+		//使用默认的栈尺寸
         initParam->uwStackSize = LOSCFG_BASE_CORE_TSK_DEFAULT_STACK_SIZE;
     }
+	//栈尺寸对齐处理
     initParam->uwStackSize = (UINT32)ALIGN(initParam->uwStackSize, LOSCFG_STACK_POINT_ALIGN_SIZE);
 
     if (initParam->uwStackSize < LOS_TASK_MIN_STACK_SIZE) {
+		//指定的栈尺寸过小
         return LOS_ERRNO_TSK_STKSZ_TOO_SMALL;
     }
 
     return LOS_OK;
 }
 
+//分配任务栈
 LITE_OS_SEC_TEXT_INIT STATIC VOID OsTaskStackAlloc(VOID **topStack, UINT32 stackSize, VOID *pool)
 {
+	//分配任务栈，压栈方向为高地址到低地址
     *topStack = (VOID *)LOS_MemAllocAlign(pool, stackSize, LOSCFG_STACK_POINT_ALIGN_SIZE);
 }
 
+//创建多核间任务同步需要的信号量，信号量初始值为0
 STATIC INLINE UINT32 OsTaskSyncCreate(LosTaskCB *taskCB)
 {
 #if (LOSCFG_KERNEL_SMP_TASK_SYNC == YES)
@@ -559,6 +661,7 @@ STATIC INLINE UINT32 OsTaskSyncCreate(LosTaskCB *taskCB)
     return LOS_OK;
 }
 
+//释放上述信号量
 STATIC INLINE VOID OsTaskSyncDestroy(UINT32 syncSignal)
 {
 #if (LOSCFG_KERNEL_SMP_TASK_SYNC == YES)
@@ -568,6 +671,8 @@ STATIC INLINE VOID OsTaskSyncDestroy(UINT32 syncSignal)
 #endif
 }
 
+//等待任务在其正在运行的CPU上处理信号，
+//等待其处理完成
 LITE_OS_SEC_TEXT UINT32 OsTaskSyncWait(const LosTaskCB *taskCB)
 {
 #if (LOSCFG_KERNEL_SMP_TASK_SYNC == YES)
@@ -575,6 +680,9 @@ LITE_OS_SEC_TEXT UINT32 OsTaskSyncWait(const LosTaskCB *taskCB)
 
     LOS_ASSERT(LOS_SpinHeld(&g_taskSpin));
     LOS_SpinUnlock(&g_taskSpin);
+	//taskCB虽然正在运行，但是有可能在等待这个自旋锁，所以这里必须释放自旋锁
+	//taskCB才有机会释放syncSignal信号量
+	//但是，这里并没有开中断，所以，这里的定时器超时等待意义不大(形同虚设)
     /*
      * gc soft timer works every OS_MP_GC_PERIOD period, to prevent this timer
      * triggered right at the timeout has reached, we set the timeout as double
@@ -584,6 +692,7 @@ LITE_OS_SEC_TEXT UINT32 OsTaskSyncWait(const LosTaskCB *taskCB)
         ret = LOS_ERRNO_TSK_MP_SYNC_FAILED;
     }
 
+	//此刻taskCB已经释放了信号量syncSignal
     LOS_SpinLock(&g_taskSpin);
 
     return ret;
@@ -593,40 +702,51 @@ LITE_OS_SEC_TEXT UINT32 OsTaskSyncWait(const LosTaskCB *taskCB)
 #endif
 }
 
+//唤醒等待此taskCB的任务
 STATIC INLINE VOID OsTaskSyncWake(const LosTaskCB *taskCB)
 {
 #if (LOSCFG_KERNEL_SMP_TASK_SYNC == YES)
-    (VOID)OsSemPostUnsafe(taskCB->syncSignal, NULL);
+	//释放信号量即可
+    (VOID)OsSemPostUnsafe(taskCB->syncSignal, NULL);  //释放后，不重新调度
 #else
     (VOID)taskCB;
 #endif
 }
 
+//释放任务的内核资源
 STATIC VOID OsTaskKernelResourcesToFree(UINT32 syncSignal, UINTPTR topOfStack)
 {
     VOID *poolTmp = (VOID *)m_aucSysMem1;
 
+	//删除多cpu间任务同步用到的信号量
     OsTaskSyncDestroy(syncSignal);
 
 #ifdef LOSCFG_EXC_INTERACTION
+	//对于shell任务和idle任务，其使用独立的内存池
     if (topOfStack < (UINTPTR)m_aucSysMem1) {
         poolTmp = (VOID *)m_aucSysMem0;
     }
 #endif
+	//释放本任务在内核中的栈空间
     (VOID)LOS_MemFree(poolTmp, (VOID *)topOfStack);
 }
 
+
+//回收待回收队列上的任务
 LITE_OS_SEC_TEXT VOID OsTaskCBRecyleToFree()
 {
     LosTaskCB *taskCB = NULL;
     UINT32 intSave;
 
     SCHEDULER_LOCK(intSave);
+	//遍历待回收队列
     while (!LOS_ListEmpty(&g_taskRecyleList)) {
+		//取出一个任务
         taskCB = OS_TCB_FROM_PENDLIST(LOS_DL_LIST_FIRST(&g_taskRecyleList));
-        LOS_ListDelete(&taskCB->pendList);
+        LOS_ListDelete(&taskCB->pendList); //任务从队列移除
         SCHEDULER_UNLOCK(intSave);
 
+		//回收这个任务
         OsTaskResourcesToFree(taskCB);
 
         SCHEDULER_LOCK(intSave);
@@ -634,6 +754,7 @@ LITE_OS_SEC_TEXT VOID OsTaskCBRecyleToFree()
     SCHEDULER_UNLOCK(intSave);
 }
 
+//回收任务资源
 LITE_OS_SEC_TEXT VOID OsTaskResourcesToFree(LosTaskCB *taskCB)
 {
     LosProcessCB *processCB = OS_PCB_FROM_PID(taskCB->processID);
@@ -643,14 +764,18 @@ LITE_OS_SEC_TEXT VOID OsTaskResourcesToFree(LosTaskCB *taskCB)
     UINT32 ret;
 
     if (OsProcessIsUserMode(processCB) && (taskCB->userMapBase != 0)) {
+		//用户态任务
         SCHEDULER_LOCK(intSave);
+		//获取用户空间中栈空间地址和尺寸
         mapBase = (UINTPTR)taskCB->userMapBase;
         mapSize = taskCB->userMapSize;
+		//取消任务的栈空间占用
         taskCB->userMapBase = 0;
         taskCB->userArea = 0;
         SCHEDULER_UNLOCK(intSave);
 
         LOS_ASSERT(!(processCB->vmSpace == NULL));
+		//释放栈空间内存
         ret = OsUnMMap(processCB->vmSpace, (UINTPTR)mapBase, mapSize);
         if ((ret != LOS_OK) && (mapBase != 0) && !(processCB->processStatus & OS_PROCESS_STATUS_INIT)) {
             PRINT_ERR("process(%u) ummap user task(%u) stack failed! mapbase: 0x%x size :0x%x, error: %d\n",
@@ -658,63 +783,77 @@ LITE_OS_SEC_TEXT VOID OsTaskResourcesToFree(LosTaskCB *taskCB)
         }
 
 #if (LOSCFG_KERNEL_LITEIPC == YES)
+		//释放本任务IPC资源
         LiteIpcRemoveServiceHandle(taskCB);
 #endif
     }
 
     if (taskCB->taskStatus & OS_TASK_STATUS_UNUSED) {
-        topOfStack = taskCB->topOfStack;
+		//继续释放内核中的资源
+        topOfStack = taskCB->topOfStack;   //内核栈地址
         taskCB->topOfStack = 0;
 #if (LOSCFG_KERNEL_SMP_TASK_SYNC == YES)
-        syncSignal = taskCB->syncSignal;
+        syncSignal = taskCB->syncSignal;   //任务用于CPU间同步的信号量
         taskCB->syncSignal = LOSCFG_BASE_IPC_SEM_LIMIT;
 #endif
+		//删除信号量和内核栈
         OsTaskKernelResourcesToFree(syncSignal, topOfStack);
 
         SCHEDULER_LOCK(intSave);
-        OsInsertTCBToFreeList(taskCB);
+        OsInsertTCBToFreeList(taskCB);  //任务存入空闲队列
         SCHEDULER_UNLOCK(intSave);
     }
     return;
 }
 
+//初始化任务控制块
 LITE_OS_SEC_TEXT_INIT STATIC VOID OsTaskCBInitBase(LosTaskCB *taskCB,
                                                    const VOID *stackPtr,
                                                    const VOID *topStack,
                                                    const TSK_INIT_PARAM_S *initParam)
 {
-    taskCB->stackPointer = (VOID *)stackPtr;
+	//任务栈
+    taskCB->stackPointer = (VOID *)stackPtr;  
+	//任务入口函数对应的参数
     taskCB->args[0]      = initParam->auwArgs[0]; /* 0~3: just for args array index */
     taskCB->args[1]      = initParam->auwArgs[1];
     taskCB->args[2]      = initParam->auwArgs[2];
     taskCB->args[3]      = initParam->auwArgs[3];
+	//栈顶
     taskCB->topOfStack   = (UINTPTR)topStack;
+	//栈尺寸
     taskCB->stackSize    = initParam->uwStackSize;
+	//任务优先级
     taskCB->priority     = initParam->usTaskPrio;
+	//任务入口函数
     taskCB->taskEntry    = initParam->pfnTaskEntry;
-    taskCB->signal       = SIGNAL_NONE;
+    taskCB->signal       = SIGNAL_NONE; //信号
 
 #if (LOSCFG_KERNEL_SMP == YES)
-    taskCB->currCpu      = OS_TASK_INVALID_CPUID;
+    taskCB->currCpu      = OS_TASK_INVALID_CPUID;  //任务还未运行
+    //默认所有CPU都可以调度本任务
     taskCB->cpuAffiMask  = (initParam->usCpuAffiMask) ?
                             initParam->usCpuAffiMask : LOSCFG_KERNEL_CPU_MASK;
 #endif
 #if (LOSCFG_KERNEL_LITEIPC == YES)
-    LOS_ListInit(&(taskCB->msgListHead));
+    LOS_ListInit(&(taskCB->msgListHead));  //任务接收其它任务发来的消息队列头
 #endif
+	//调度策略
     taskCB->policy = (initParam->policy == LOS_SCHED_FIFO) ? LOS_SCHED_FIFO : LOS_SCHED_RR;
-    taskCB->taskStatus = OS_TASK_STATUS_INIT;
+    taskCB->taskStatus = OS_TASK_STATUS_INIT;  //任务当前刚初始化
     if (initParam->uwResved & OS_TASK_FLAG_DETACHED) {
-        taskCB->taskStatus |= OS_TASK_FLAG_DETACHED;
+        taskCB->taskStatus |= OS_TASK_FLAG_DETACHED;  //自删除任务
     } else {
         LOS_ListInit(&taskCB->joinList);
-        taskCB->taskStatus |= OS_TASK_FLAG_PTHREAD_JOIN;
+        taskCB->taskStatus |= OS_TASK_FLAG_PTHREAD_JOIN; //由其它任务来删除的任务
     }
 
-    taskCB->futex.index = OS_INVALID_VALUE;
-    LOS_ListInit(&taskCB->lockList);
+    taskCB->futex.index = OS_INVALID_VALUE;  //用户态线程的同步和互斥优化
+    LOS_ListInit(&taskCB->lockList);  //任务当前所持有的互斥锁列表
 }
 
+
+//初始化任务控制块
 STATIC UINT32 OsTaskCBInit(LosTaskCB *taskCB, const TSK_INIT_PARAM_S *initParam,
                            const VOID *stackPtr, const VOID *topStack)
 {
@@ -724,42 +863,50 @@ STATIC UINT32 OsTaskCBInit(LosTaskCB *taskCB, const TSK_INIT_PARAM_S *initParam,
     UINT16 mode;
     LosProcessCB *processCB = NULL;
 
+	//先初始化一部分
     OsTaskCBInitBase(taskCB, stackPtr, topStack, initParam);
 
     SCHEDULER_LOCK(intSave);
-    processCB = OS_PCB_FROM_PID(initParam->processID);
-    taskCB->processID = processCB->processID;
-    mode = processCB->processMode;
-    LOS_ListTailInsert(&(processCB->threadSiblingList), &(taskCB->threadList));
+    processCB = OS_PCB_FROM_PID(initParam->processID);  //任务所在进程
+    taskCB->processID = processCB->processID; //记录进程号
+    mode = processCB->processMode;  //进程模式
+    LOS_ListTailInsert(&(processCB->threadSiblingList), &(taskCB->threadList)); //任务加入进程
     if (mode == OS_USER_MODE) {
+		//用户态进程
+		//设置用户态栈空间
         taskCB->userArea = initParam->userParam.userArea;
         taskCB->userMapBase = initParam->userParam.userMapBase;
         taskCB->userMapSize = initParam->userParam.userMapSize;
+		//将用户态任务上下文(PC, SP)保存在内核栈中，在任务切换的时候能顺利的执行用户态任务
         OsUserTaskStackInit(taskCB->stackPointer, taskCB->taskEntry, initParam->userParam.userSP);
     }
 
     if (!processCB->threadNumber) {
+		//当前任务为进程中的第一个有效任务，设为主任务
         processCB->threadGroupID = taskCB->taskID;
     }
-    processCB->threadNumber++;
+    processCB->threadNumber++;  //进程中有效任务数目增加
 
     numCount = processCB->threadCount;
-    processCB->threadCount++;
+    processCB->threadCount++;   //进程中总任务数目增加
     SCHEDULER_UNLOCK(intSave);
 
     if (initParam->pcName != NULL) {
+		//设置任务名称，不同步设置进程名称
         ret = (UINT32)OsSetTaskName(taskCB, initParam->pcName, FALSE);
         if (ret == LOS_OK) {
             return LOS_OK;
         }
     }
 
+	//如果用户没有指定任务名称，则根据进程中当前已有任务数来生成任务名称
     if (snprintf_s(taskCB->taskName, OS_TCB_NAME_LEN, OS_TCB_NAME_LEN - 1, "thread%u", numCount) < 0) {
         return LOS_NOK;
     }
     return LOS_OK;
 }
 
+//获取空闲任务控制块
 LITE_OS_SEC_TEXT LosTaskCB *OsGetFreeTaskCB(VOID)
 {
     UINT32 intSave;
@@ -769,16 +916,17 @@ LITE_OS_SEC_TEXT LosTaskCB *OsGetFreeTaskCB(VOID)
     if (LOS_ListEmpty(&g_losFreeTask)) {
         SCHEDULER_UNLOCK(intSave);
         PRINT_ERR("No idle TCB in the system!\n");
-        return NULL;
+        return NULL; //任务控制块耗尽
     }
 
     taskCB = OS_TCB_FROM_PENDLIST(LOS_DL_LIST_FIRST(&g_losFreeTask));
-    LOS_ListDelete(LOS_DL_LIST_FIRST(&g_losFreeTask));
+    LOS_ListDelete(LOS_DL_LIST_FIRST(&g_losFreeTask)); //取出一个空闲的任务控制块
     SCHEDULER_UNLOCK(intSave);
 
-    return taskCB;
+    return taskCB;  //返回空闲的任务控制块
 }
 
+//只创建任务，不调度运行
 LITE_OS_SEC_TEXT_INIT UINT32 LOS_TaskCreateOnly(UINT32 *taskID, TSK_INIT_PARAM_S *initParam)
 {
     UINT32 intSave, errRet;
@@ -787,38 +935,45 @@ LITE_OS_SEC_TEXT_INIT UINT32 LOS_TaskCreateOnly(UINT32 *taskID, TSK_INIT_PARAM_S
     LosTaskCB *taskCB = NULL;
     VOID *pool = NULL;
 
+	//先检查参数
     errRet = OsTaskCreateParamCheck(taskID, initParam, &pool);
     if (errRet != LOS_OK) {
         return errRet;
     }
 
+	//获取空闲任务控制块
     taskCB = OsGetFreeTaskCB();
     if (taskCB == NULL) {
         errRet = LOS_ERRNO_TSK_TCB_UNAVAILABLE;
         goto LOS_ERREND;
     }
 
+	//创建多cpu场景下用于线程间同步处理信号的信号量
     errRet = OsTaskSyncCreate(taskCB);
     if (errRet != LOS_OK) {
         goto LOS_ERREND_REWIND_TCB;
     }
 
+	//分配任务栈
     OsTaskStackAlloc(&topStack, initParam->uwStackSize, pool);
     if (topStack == NULL) {
         errRet = LOS_ERRNO_TSK_NO_MEMORY;
         goto LOS_ERREND_REWIND_SYNC;
     }
 
+	//初始化任务栈
     stackPtr = OsTaskStackInit(taskCB->taskID, initParam->uwStackSize, topStack, TRUE);
+	//初始化任务控制块以及相关数据
     errRet = OsTaskCBInit(taskCB, initParam, stackPtr, topStack);
     if (errRet != LOS_OK) {
         goto LOS_ERREND_TCB_INIT;
     }
     if (OsConsoleIDSetHook != NULL) {
+		//设置任务的控制台ID与本任务的控制台ID保持一致
         OsConsoleIDSetHook(taskCB->taskID, OsCurrTaskGet()->taskID);
     }
 
-    *taskID = taskCB->taskID;
+    *taskID = taskCB->taskID;  //返回成功创建的任务ID
     return LOS_OK;
 
 LOS_ERREND_TCB_INIT:

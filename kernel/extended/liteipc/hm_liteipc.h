@@ -69,7 +69,7 @@ typedef struct {
 
 typedef struct {
     IpcPool pool;
-    UINT32 ipcTaskID;
+    UINT32 ipcTaskID;  //每个进程有若干个线程，只需要1个线程参与IPC
     UINT32 access[LOSCFG_BASE_CORE_TSK_LIMIT];
 } ProcIpcInfo;
 

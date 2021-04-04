@@ -58,6 +58,7 @@ UINT32 OsStackWaterLineGet(const UINTPTR *stackBottom, const UINTPTR *stackTop, 
     }
 }
 
+//任务切换时对异常处理相关的栈也做一个检查
 VOID OsExcStackCheck(VOID)
 {
     UINT32 index;
@@ -71,6 +72,7 @@ VOID OsExcStackCheck(VOID)
         for (cpuid = 0; cpuid < LOSCFG_KERNEL_CORE_NUM; cpuid++) {
             stackTop = (UINTPTR *)((UINTPTR)g_stackInfo[index].stackTop + cpuid * g_stackInfo[index].stackSize);
             if (*stackTop != OS_STACK_MAGIC_WORD) {
+				//栈顶数字被改，极大可能发生了溢出
                 PRINT_ERR("cpu:%u %s overflow , magic word changed to 0x%x\n",
                           LOSCFG_KERNEL_CORE_NUM - 1 - cpuid, g_stackInfo[index].stackName, *stackTop);
             }

@@ -109,8 +109,9 @@ typedef struct ProcessCB {
     UINTPTR              sigHandler;   /**< Signal handler */
     sigset_t             sigShare;     /**< Signal share bit */
 #if (LOSCFG_KERNEL_LITEIPC == YES)
-    ProcIpcInfo         ipcInfo;       /**< Memory pool for lite ipc */
+    ProcIpcInfo         ipcInfo;       /**< Memory pool for lite ipc */ 
 #endif
+
     LosVmSpace          *vmSpace;      /**< VMM space for processes */
 #ifdef LOSCFG_FS_VFS
     struct files_struct *files;        /**< Files held by the process */

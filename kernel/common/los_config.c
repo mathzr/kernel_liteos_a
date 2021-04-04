@@ -265,6 +265,7 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
 	//系统异常时，受限shell模块的相关初始化
     OsExcInit();
 
+	//时钟中断相关初始化
     ret = OsTickInit(g_sysClock, LOSCFG_BASE_CORE_TICK_PER_SECOND);
     if (ret != LOS_OK) {
         return ret;
@@ -272,12 +273,12 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
 
 #ifdef LOSCFG_PLATFORM_UART_WITHOUT_VFS
 #ifdef LOSCFG_DRIVERS
-    uart_init();
+    uart_init();  //串口初始化
 #endif
 #ifdef LOSCFG_SHELL
 #endif //LOSCFG_SHELL
 #endif //LOSCFG_PLATFORM_UART_WITHOUT_VFS
-    ret = OsTaskInit();
+    ret = OsTaskInit();   //任务管理模块初始化
     if (ret != LOS_OK) {
         PRINT_ERR("OsTaskInit error\n");
         return ret;
