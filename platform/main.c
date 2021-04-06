@@ -73,28 +73,30 @@ LITE_OS_SEC_TEXT_INIT VOID OsSystemInfo(VOID)
             KERNEL_NAME, KERNEL_MAJOR, KERNEL_MINOR, KERNEL_PATCH, KERNEL_ITRE, buildType);
 }
 
+//从核CPU的启动，由汇编代码调用
 LITE_OS_SEC_TEXT_INIT VOID secondary_cpu_start(VOID)
 {
-#if (LOSCFG_KERNEL_SMP == YES)
+#if (LOSCFG_KERNEL_SMP == YES)  //多核CPU的产品才支持这部分代码
     UINT32 cpuid = ArchCurrCpuid();
 
-    OsArchMmuInitPerCPU();
+    OsArchMmuInitPerCPU();  //初始化本CPU的内存管理单元
 
-    OsCurrTaskSet(OsGetMainTask());
+    OsCurrTaskSet(OsGetMainTask());  //设置当前任务为mainTask[cpu]
 
     /* increase cpu counter */
-    LOS_AtomicInc(&g_ncpu);
+    LOS_AtomicInc(&g_ncpu);  //增加当前工作的cpu数目
 
     /* store each core's hwid */
-    CPU_MAP_SET(cpuid, OsHwIDGet());
-    HalIrqInitPercpu();
+    CPU_MAP_SET(cpuid, OsHwIDGet());  //记录当前cpu的硬件ID
+    HalIrqInitPercpu();  //初始化当前CPU的中断
 
+	//设置当前进程为KProcess
     OsCurrProcessSet(OS_PCB_FROM_PID(OsGetKernelInitProcessID()));
-    OsSwtmrInit();
-    OsIdleTaskCreate();
-    OsStart();
+    OsSwtmrInit();  //初始化本CPU的软件定时器计时模块
+    OsIdleTaskCreate(); //初始化本CPU的idle线程
+    OsStart();  //让OS运行起来
     while (1) {
-        __asm volatile("wfi");
+        __asm volatile("wfi");  //循环等待中断信号
     }
 #endif
 }
@@ -183,9 +185,9 @@ LITE_OS_SEC_TEXT_INIT INT32 main(VOID)
     release_secondary_cores();
 #endif
 
-    CPU_MAP_SET(0, OsHwIDGet());
+    CPU_MAP_SET(0, OsHwIDGet());  //记录CPU的硬件ID
 
-    OsStart();  
+    OsStart();  //让OS运行起来
 
     while (1) {
         __asm volatile("wfi");

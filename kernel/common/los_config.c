@@ -133,9 +133,12 @@ extern UINT32 OsSystemInit(VOID);
 
 VOID __attribute__((weak)) SystemInit(VOID)
 {
+	//只是一个弱引用函数的定义，及其它地方应该定义这个函数，如果没有定义
+	//会使用这个同名函数
     PRINT_WARN("Function not implemented. Using weak reference stub\n");
 }
 
+//记录时钟频率和tick频率
 LITE_OS_SEC_TEXT_INIT VOID osRegister(VOID)
 {
     g_sysClock = OS_SYS_CLOCK;  //记录时钟主频
@@ -145,46 +148,50 @@ LITE_OS_SEC_TEXT_INIT VOID osRegister(VOID)
     return;
 }
 
+//启动操作系统
 LITE_OS_SEC_TEXT_INIT VOID OsStart(VOID)
 {
     LosProcessCB *runProcess = NULL;
     LosTaskCB *taskCB = NULL;
     UINT32 cpuid = ArchCurrCpuid();
 
-    OsTickStart();
+    OsTickStart();  //系统开始计时
 
     LOS_SpinLock(&g_taskSpin);
-    taskCB = OsGetTopTask();
+    taskCB = OsGetTopTask();  //选择优先级最高的就绪任务
 
     runProcess = OS_PCB_FROM_PID(taskCB->processID);
-    runProcess->processStatus |= OS_PROCESS_STATUS_RUNNING;
+    runProcess->processStatus |= OS_PROCESS_STATUS_RUNNING; //将进程置运行态
 #if (LOSCFG_KERNEL_SMP == YES)
     /*
      * attention: current cpu needs to be set, in case first task deletion
      * may fail because this flag mismatch with the real current cpu.
      */
-    taskCB->currCpu = cpuid;
+    taskCB->currCpu = cpuid; //记录下正在运行此任务的CPU
+    //更新进程中正在运行的任务数
     runProcess->processStatus = OS_PROCESS_RUNTASK_COUNT_ADD(runProcess->processStatus);
 #endif
 
-    OS_SCHEDULER_SET(cpuid);
+    OS_SCHEDULER_SET(cpuid);  //标记本CPU参与任务调度
 
     PRINTK("cpu %d entering scheduler\n", cpuid);
-    OsStartToRun(taskCB);
+    OsStartToRun(taskCB);   //然后开始运行这个任务
 }
 
+
+//初始化ipc相关模块
 LITE_OS_SEC_TEXT_INIT STATIC UINT32 OsIpcInit(VOID)
 {
     UINT32 ret;
 #if (LOSCFG_BASE_IPC_SEM == YES)
-    ret = OsSemInit();
+    ret = OsSemInit();  //初始化信号量模块
     if (ret != LOS_OK) {
         return ret;
     }
 #endif
 
 #if (LOSCFG_BASE_IPC_QUEUE == YES)
-    ret = OsQueueInit();
+    ret = OsQueueInit();  //初始化消息队列模块
     if (ret != LOS_OK) {
         return ret;
     }
@@ -193,6 +200,7 @@ LITE_OS_SEC_TEXT_INIT STATIC UINT32 OsIpcInit(VOID)
 }
 
 #ifdef LOSCFG_KERNEL_PIPE
+//初始化内核管道
 LITE_OS_SEC_TEXT_INIT STATIC VOID OsDriverPipeInit(VOID)
 {
     (VOID)pipe_init();
@@ -200,13 +208,14 @@ LITE_OS_SEC_TEXT_INIT STATIC VOID OsDriverPipeInit(VOID)
 #endif
 
 #ifdef LOSCFG_DRIVERS_HIEVENT
+//初始化hievent
 LITE_OS_SEC_TEXT_INIT STATIC VOID OsDriverHiEventInit(VOID)
 {
     (VOID)HieventInit();
 }
 #endif
 
-#ifdef LOSCFG_COMPAT_BSD
+#ifdef LOSCFG_COMPAT_BSD  //针对bsd的兼容
 extern void configure (void);
 LITE_OS_SEC_TEXT_INIT STATIC INT32 OsBsdInit(VOID)
 {
@@ -226,22 +235,22 @@ LITE_OS_SEC_TEXT_INIT STATIC INT32 OsBsdInit(VOID)
 }
 #endif
 
-
+//主要的操作系统相关的初始化
 LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
 {
     UINT32 ret;
 
-    osRegister();
+    osRegister(); //时钟频率和tick频率注册
 
 #ifdef LOSCFG_SHELL_DMESG
-    ret = OsDmesgInit();
+    ret = OsDmesgInit();  //内核日志记录模块初始化
     if (ret != LOS_OK) {
         return ret;
     }
 #endif
 
 #ifdef LOSCFG_SHELL_LK
-    OsLkLoggerInit(NULL);
+    OsLkLoggerInit(NULL); //内核日志查看模块初始化
 #endif
 
 //异常状态下受限shell功能所使用的内存池
@@ -291,13 +300,14 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
     }
 #endif
 
+	//内存相关的初始化
     ret = OsSysMemInit();
     if (ret != LOS_OK) {
         PRINT_ERR("OsSysMemInit error\n");
         return ret;
     }
 
-    SyscallHandleInit();
+    SyscallHandleInit(); //系统调用相关的初始化
 
     /*
      * CPUP should be inited before first task creation which depends on the semaphore
@@ -308,14 +318,14 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
      * 3. other inits have task creation
      */
 #ifdef LOSCFG_KERNEL_CPUP
-    ret = OsCpupInit();
+    ret = OsCpupInit(); //cpu使用率运维统计模块初始化
     if (ret != LOS_OK) {
         PRINT_ERR("OsCpupInit error\n");
         return ret;
     }
 #endif
 
-    ret = OsKernelInitProcess();
+    ret = OsKernelInitProcess();  //创建内核态进程
     if (ret != LOS_OK) {
         return ret;
     }
