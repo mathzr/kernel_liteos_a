@@ -45,19 +45,27 @@ extern "C" {
 #ifdef LOSCFG_DEBUG_QUEUE
 
 typedef struct {
+	//创建消息队列的线程对应的入口函数
     TSK_ENTRY_FUNC creater; /* The task entry who created this queue */
+	//最近一次操作消息队列的时间
     UINT64  lastAccessTime; /* The last access time */
 } QueueDebugCB;
+
+//消息队列调试信息控制块
 STATIC QueueDebugCB *g_queueDebugArray = NULL;
 
+//对2个消息队列调试信息控制块做大小比较
 STATIC BOOL QueueCompareValue(const IpcSortParam *sortParam, UINT32 left, UINT32 right)
 {
+	//判断前一个表项是否大于后一个表项，主要比较的是时间，时间值用64位整数表示
     return (*((UINT64 *)(VOID *)SORT_ELEM_ADDR(sortParam, left)) >
             *((UINT64 *)(VOID *)SORT_ELEM_ADDR(sortParam, right)));
 }
 
+//初始化消息队列调试模块
 UINT32 OsQueueDbgInit(VOID)
 {
+	//新申请消息队列调试控制块数组
     UINT32 size = LOSCFG_BASE_IPC_QUEUE_LIMIT * sizeof(QueueDebugCB);
     /* system resident memory, don't free */
     g_queueDebugArray = (QueueDebugCB *)LOS_MemAlloc(m_aucSysMem1, size);
@@ -65,10 +73,12 @@ UINT32 OsQueueDbgInit(VOID)
         PRINT_ERR("%s: malloc failed!\n", __FUNCTION__);
         return LOS_NOK;
     }
+	//并清0所有控制块
     (VOID)memset_s(g_queueDebugArray, size, 0, size);
     return LOS_OK;
 }
 
+//刷新某消息队列的访问时间
 VOID OsQueueDbgTimeUpdate(UINT32 queueID)
 {
     QueueDebugCB *queueDebug = &g_queueDebugArray[GET_QUEUE_INDEX(queueID)];

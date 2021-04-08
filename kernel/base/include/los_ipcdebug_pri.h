@@ -51,6 +51,7 @@ typedef struct {
 typedef BOOL (*OsCompareFunc)(const IpcSortParam *sortParam, UINT32 left, UINT32 right);
 
 /* Get the address of the comparison member variable */
+//根据索引定位到结构体，再定位结构体中用于比较的数据成员
 #define SORT_ELEM_ADDR(sortParam, index) \
     ((sortParam)->buf + ((index) * (sortParam)->ipcDebugCBSize) + (sortParam)->sortElemOff)
 
