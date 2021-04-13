@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -45,6 +45,10 @@
 #include "los_process.h"
 #include "los_process_pri.h"
 #include "user_copy.h"
+#ifdef LOSCFG_SHELL
+#include "shcmd.h"
+#include "shell.h"
+#endif
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -52,16 +56,19 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
-STATIC LosMux g_sysvShmMux;  //共享内存管理模块的互斥锁
+#ifdef LOSCFG_KERNEL_SHM
+
+STATIC LosMux g_sysvShmMux;
 
 /* private macro */
 #define SYSV_SHM_LOCK()     (VOID)LOS_MuxLock(&g_sysvShmMux, LOS_WAIT_FOREVER) //获取锁
 #define SYSV_SHM_UNLOCK()   (VOID)LOS_MuxUnlock(&g_sysvShmMux) //释放锁
 
-#define SHM_MAX_PAGES 12800  //1个共享内存最多12800页
-#define SHM_MAX (SHM_MAX_PAGES * PAGE_SIZE) //1个共享内存的最大尺寸
-#define SHM_MIN 1 //共享内存的最小尺寸是1字节
-#define SHM_MNI 192 //系统支持的最少的共享内存个数
+/* The upper limit size of total shared memory is default 16M */
+#define SHM_MAX_PAGES 4096
+#define SHM_MAX (SHM_MAX_PAGES * PAGE_SIZE)
+#define SHM_MIN 1
+#define SHM_MNI 192
 #define SHM_SEG 128
 #define SHM_ALL (SHM_MAX_PAGES)
 
@@ -74,23 +81,28 @@ STATIC LosMux g_sysvShmMux;  //共享内存管理模块的互斥锁
 #define SHM_M   010000
 #endif
 
+#ifndef SHM_X
+#define SHM_X   0100
+#endif
+
 #ifndef ACCESSPERMS
 #define ACCESSPERMS (S_IRWXU | S_IRWXG | S_IRWXO)
 #endif
 
+#define SHM_S_IRUGO (S_IRUSR | S_IRGRP | S_IROTH)
+#define SHM_S_IWUGO (S_IWUSR | S_IWGRP | S_IWOTH)
+#define SHM_S_IXUGO (S_IXUSR | S_IXGRP | S_IXOTH)
+
 #define SHM_GROUPE_TO_USER  3
 #define SHM_OTHER_TO_USER   6
-
-/* private structure */
-struct shmSegMap {
-    vaddr_t vaddr;  //虚拟内存首地址
-    INT32 shmID; //共享内存ID
-};
 
 struct shmIDSource { //共享内存ID资源
     struct shmid_ds ds; //共享内存描述符
     UINT32 status; //状态
     LOS_DL_LIST node; //物理内存页链表头
+#ifdef LOSCFG_SHELL
+    CHAR ownerName[OS_PCB_NAME_LEN];
+#endif
 };
 
 /* private data */
@@ -103,6 +115,7 @@ STATIC struct shminfo g_shmInfo = {
 };
 
 STATIC struct shmIDSource *g_shmSegs = NULL; //共享内存资源列表首地址
+STATIC UINT32 g_shmUsedPageCount;
 
 INT32 ShmInit(VOID)
 {
@@ -128,6 +141,7 @@ INT32 ShmInit(VOID)
         g_shmSegs[i].ds.shm_perm.seq = i + 1; //初始序号为列表序号加1
         LOS_ListInit(&g_shmSegs[i].node); //刚开始不含任务物理内存
     }
+    g_shmUsedPageCount = 0;
 
     return 0;
 }
@@ -184,9 +198,7 @@ STATIC VOID ShmPagesRefDec(struct shmIDSource *seg)
     }
 }
 
-
-//申请共享内存资源，寻找空闲的共享内存描述符
-STATIC INT32 ShmAllocSeg(key_t key, size_t size, int shmflg)
+STATIC INT32 ShmAllocSeg(key_t key, size_t size, INT32 shmflg)
 {
     INT32 i;
     INT32 segNum = -1;
@@ -198,6 +210,9 @@ STATIC INT32 ShmAllocSeg(key_t key, size_t size, int shmflg)
         return -EINVAL; //尺寸不满足要求
     }
     size = LOS_Align(size, PAGE_SIZE); //共享内存尺寸需要对齐到页的整数倍
+    if ((g_shmUsedPageCount + (size >> PAGE_SHIFT)) > g_shmInfo.shmall) {
+        return -ENOMEM;
+    }
 
 	//遍历所有共享内存资源
     for (i = 0; i < g_shmInfo.shmmni; i++) {
@@ -223,15 +238,16 @@ STATIC INT32 ShmAllocSeg(key_t key, size_t size, int shmflg)
         return -ENOMEM;
     }
     ShmSetSharedFlag(seg); //标记所有申请到的物理页为共享内存的物理页
+    g_shmUsedPageCount += size >> PAGE_SHIFT;
 
-    seg->status |= SHM_SEG_USED; //设置描述符为已使用状态
-    seg->ds.shm_perm.mode = (unsigned int)shmflg & ACCESSPERMS; //记录访问权限
-    seg->ds.shm_perm.key = key; //记录key
-    seg->ds.shm_segsz = size; //记录size
-    seg->ds.shm_perm.cuid = LOS_GetUserID(); //记录创建此共享内存的用户ID
-    seg->ds.shm_perm.uid = LOS_GetUserID();  //记录创建此共享内存的用户ID
-    seg->ds.shm_perm.cgid = LOS_GetGroupID();//记录创建此共享内存的用户组ID
-    seg->ds.shm_perm.gid = LOS_GetGroupID(); //记录创建此共享内存的用户组ID
+    seg->status |= SHM_SEG_USED;
+    seg->ds.shm_perm.mode = (UINT32)shmflg & ACCESSPERMS;
+    seg->ds.shm_perm.key = key;
+    seg->ds.shm_segsz = size;
+    seg->ds.shm_perm.cuid = LOS_GetUserID();
+    seg->ds.shm_perm.uid = LOS_GetUserID();
+    seg->ds.shm_perm.cgid = LOS_GetGroupID();
+    seg->ds.shm_perm.gid = LOS_GetGroupID();
     seg->ds.shm_lpid = 0;
     seg->ds.shm_nattch = 0;                   //记录使用此共享内存的进程数目
     seg->ds.shm_cpid = LOS_GetCurrProcessID();//记录创建此共享内存的进程ID
@@ -239,6 +255,9 @@ STATIC INT32 ShmAllocSeg(key_t key, size_t size, int shmflg)
     seg->ds.shm_atime = 0;
     seg->ds.shm_dtime = 0;
     seg->ds.shm_ctime = time(NULL); //创建时间
+#ifdef LOSCFG_SHELL
+    (VOID)memcpy_s(seg->ownerName, OS_PCB_NAME_LEN, OsCurrProcessGet()->processName, OS_PCB_NAME_LEN);
+#endif
 
     return segNum;
 }
@@ -254,7 +273,7 @@ STATIC INLINE VOID ShmFreeSeg(struct shmIDSource *seg)
         VM_ERR("free physical pages failed, count = %d, size = %d", count, seg->ds.shm_segsz >> PAGE_SHIFT);
         return;
     }
-
+    g_shmUsedPageCount -= seg->ds.shm_segsz >> PAGE_SHIFT;
     seg->status = SHM_SEG_FREE; //将描述符标记成空闲
     LOS_ListInit(&seg->node); //初始化物理内存页队列头
 }
@@ -278,8 +297,7 @@ STATIC INT32 ShmFindSegByKey(key_t key)
     return -1; //查找失败返回-1
 }
 
-//检查某共享内存是否满足要求
-STATIC INT32 ShmSegValidCheck(INT32 segNum, size_t size, int shmFalg)
+STATIC INT32 ShmSegValidCheck(INT32 segNum, size_t size, INT32 shmFlg)
 {
     struct shmIDSource *seg = &g_shmSegs[segNum];
 
@@ -287,7 +305,7 @@ STATIC INT32 ShmSegValidCheck(INT32 segNum, size_t size, int shmFalg)
         return -EINVAL; //超过了共享内存的大小
     }
 
-    if ((shmFalg & (IPC_CREAT | IPC_EXCL)) ==
+    if (((UINT32)shmFlg & (IPC_CREAT | IPC_EXCL)) ==
         (IPC_CREAT | IPC_EXCL)) {
         return -EEXIST; //重复创建
     }
@@ -381,7 +399,7 @@ VOID OsShmRegionFree(LosVmSpace *space, LosVmMapRegion *region)
     } else {
         seg->ds.shm_dtime = time(NULL); //最近一次与虚拟地址空间取消关联的时间
         //操作者进程ID
-        seg->ds.shm_lpid = LOS_GetCurrProcessID();/* may not be the space's PID. */
+        seg->ds.shm_lpid = LOS_GetCurrProcessID(); /* may not be the space's PID. */
     }
     SYSV_SHM_UNLOCK();
 }
@@ -438,12 +456,17 @@ STATIC INT32 ShmPermCheck(struct shmIDSource *seg, mode_t mode)
         tmpMode |= SHM_W;
     }
 
-    if ((mode == SHM_M) && (tmpMode & SHM_M)) {
-        return 0;
+    if (privMode & SHM_X) {
+        tmpMode |= SHM_X;
     }
 
-    tmpMode &= ~SHM_M;
-    if ((tmpMode & mode) == accMode) {
+    if ((mode == SHM_M) && (tmpMode & SHM_M)) {
+        return 0;
+    } else if (mode == SHM_M) {
+        return EACCES;
+    }
+
+    if ((tmpMode & accMode) == accMode) {
         return 0;
     } else {
         return EACCES;
@@ -457,8 +480,8 @@ INT32 ShmGet(key_t key, size_t size, INT32 shmflg)
     INT32 shmid;
 
     SYSV_SHM_LOCK();
-    if ((((UINT32)shmflg & IPC_CREAT) == 0) &&
-        (((UINT32)shmflg & IPC_EXCL) == 1)) {
+    if (!((UINT32)shmflg & IPC_CREAT) &&
+        ((UINT32)shmflg & IPC_EXCL)) {
         ret = -EINVAL; //shmflg参数不合理
         goto ERROR;
     }
@@ -466,15 +489,11 @@ INT32 ShmGet(key_t key, size_t size, INT32 shmflg)
     if (key == IPC_PRIVATE) {
 		//由系统直接分配共享内存资源
         ret = ShmAllocSeg(key, size, shmflg);
-        if (ret < 0) {
-            goto ERROR;
-        }
     } else {
     	//通过key查找系统中是否已有对应的共享内存资源
         ret = ShmFindSegByKey(key);
         if (ret < 0) {
-			//共享内存不存在
-            if (((unsigned int)shmflg & IPC_CREAT) == 0) {
+            if (((UINT32)shmflg & IPC_CREAT) == 0) {
                 ret = -ENOENT; //用户不允许创建
                 goto ERROR;
             } else {
@@ -484,8 +503,7 @@ INT32 ShmGet(key_t key, size_t size, INT32 shmflg)
         } else {
         	//共享内存存在
             shmid = ret;
-			//检查权限是否满足需要
-            ret = ShmPermCheck(ShmFindSeg(shmid), (unsigned int)shmflg & ACCESSPERMS);
+            ret = ShmPermCheck(ShmFindSeg(shmid), (UINT32)shmflg & ACCESSPERMS);
             if (ret != 0) {
                 ret = -ret;
                 goto ERROR;
@@ -508,14 +526,14 @@ ERROR:
     return -1;
 }
 
-INT32 ShmatParamCheck(const void *shmaddr, int shmflg)
+INT32 ShmatParamCheck(const VOID *shmaddr, INT32 shmflg)
 {
-    if ((shmflg & SHM_REMAP) && (shmaddr == NULL)) {
+    if (((UINT32)shmflg & SHM_REMAP) && (shmaddr == NULL)) {
         return EINVAL; //如果是重映射，则原地址不能为空
     }
 
     if ((shmaddr != NULL) && !IS_PAGE_ALIGNED(shmaddr) &&
-        ((shmflg & SHM_RND) == 0)) {
+        (((UINT32)shmflg & SHM_RND) == 0)) {
         return EINVAL; //指定的虚拟地址必须页对齐
     }
 
@@ -527,28 +545,32 @@ LosVmMapRegion *ShmatVmmAlloc(struct shmIDSource *seg, const VOID *shmaddr,
 {
     LosVmSpace *space = OsCurrProcessGet()->vmSpace;
     LosVmMapRegion *region = NULL;
+    UINT32 flags = MAP_ANONYMOUS | MAP_SHARED;
+    UINT32 mapFlags = flags | MAP_FIXED;
     VADDR_T vaddr;
     UINT32 regionFlags;
     INT32 ret;
 
-    regionFlags = OsCvtProtFlagsToRegionFlags(prot, MAP_ANONYMOUS | MAP_SHARED);
+    if (shmaddr != NULL) {
+        flags |= MAP_FIXED_NOREPLACE;
+    }
+    regionFlags = OsCvtProtFlagsToRegionFlags(prot, flags);
     (VOID)LOS_MuxAcquire(&space->regionMux);
     if (shmaddr == NULL) {
         region = LOS_RegionAlloc(space, 0, seg->ds.shm_segsz, regionFlags, 0);
     } else {
-        if (shmflg & SHM_RND) {
+        if ((UINT32)shmflg & SHM_RND) {
             vaddr = ROUNDDOWN((VADDR_T)(UINTPTR)shmaddr, SHMLBA);
         } else {
             vaddr = (VADDR_T)(UINTPTR)shmaddr;
         }
-        if (!(shmflg & SHM_REMAP) && (LOS_RegionFind(space, vaddr) ||
-                LOS_RegionFind(space, vaddr + seg->ds.shm_segsz - 1) ||
-                LOS_RegionRangeFind(space, vaddr, seg->ds.shm_segsz - 1))) {
+        if (!((UINT32)shmflg & SHM_REMAP) && (LOS_RegionFind(space, vaddr) ||
+            LOS_RegionFind(space, vaddr + seg->ds.shm_segsz - 1) ||
+            LOS_RegionRangeFind(space, vaddr, seg->ds.shm_segsz - 1))) {
             ret = EINVAL;
             goto ERROR;
         }
-        vaddr = (VADDR_T)LOS_MMap(vaddr, seg->ds.shm_segsz, prot,
-                                      MAP_ANONYMOUS | MAP_SHARED, -1, 0);
+        vaddr = (VADDR_T)LOS_MMap(vaddr, seg->ds.shm_segsz, prot, mapFlags, -1, 0);
         region = LOS_RegionFind(space, vaddr);
     }
 
@@ -572,9 +594,9 @@ VOID *ShmAt(INT32 shmid, const VOID *shmaddr, INT32 shmflg)
 {
     INT32 ret;
     UINT32 prot = PROT_READ;
+    mode_t acc_mode = SHM_S_IRUGO;
     struct shmIDSource *seg = NULL;
     LosVmMapRegion *r = NULL;
-    mode_t mode;
 
 	//检查虚拟地址和映射参数
     ret = ShmatParamCheck(shmaddr, shmflg);
@@ -585,8 +607,10 @@ VOID *ShmAt(INT32 shmid, const VOID *shmaddr, INT32 shmflg)
 
     if ((UINT32)shmflg & SHM_EXEC) {
         prot |= PROT_EXEC;  //共享内存用来加载代码，那么需要补充可执行权限
+        acc_mode |= SHM_S_IXUGO;
     } else if (((UINT32)shmflg & SHM_RDONLY) == 0) {
         prot |= PROT_WRITE; //共享内存用来写数据，那么需要补充写权限
+        acc_mode |= SHM_S_IWUGO;
     }
 
     SYSV_SHM_LOCK();
@@ -596,9 +620,7 @@ VOID *ShmAt(INT32 shmid, const VOID *shmaddr, INT32 shmflg)
         return (VOID *)-1;
     }
 
-	//设置读or读写权限
-    mode = ((unsigned int)shmflg & SHM_RDONLY) ? SHM_R : (SHM_R | SHM_W);
-    ret = ShmPermCheck(seg, mode); //检查共享内存的当前权限是否满足
+    ret = ShmPermCheck(seg, acc_mode);
     if (ret != 0) {
         goto ERROR;
     }
@@ -656,7 +678,7 @@ INT32 ShmCtl(INT32 shmid, INT32 cmd, struct shmid_ds *buf)
     switch (cmd) {
         case IPC_STAT:
         case SHM_STAT:
-            ret = ShmPermCheck(seg, SHM_R); //检查读权限
+            ret = ShmPermCheck(seg, SHM_S_IRUGO);
             if (ret != 0) {
                 goto ERROR;
             }
@@ -689,6 +711,10 @@ INT32 ShmCtl(INT32 shmid, INT32 cmd, struct shmid_ds *buf)
             seg->ds.shm_perm.mode = (seg->ds.shm_perm.mode & ~ACCESSPERMS) |
                                     (shm_perm.mode & ACCESSPERMS);
             seg->ds.shm_ctime = time(NULL);
+#ifdef LOSCFG_SHELL
+            (VOID)memcpy_s(seg->ownerName, OS_PCB_NAME_LEN, OS_PCB_FROM_PID(shm_perm.uid)->processName,
+                           OS_PCB_NAME_LEN);
+#endif
             break;
         case IPC_RMID:
             ret = ShmPermCheck(seg, SHM_M);
@@ -800,6 +826,92 @@ ERROR:
     PRINT_DEBUG("%s %d, ret = %d\n", __FUNCTION__, __LINE__, ret);
     return -1;
 }
+
+#ifdef LOSCFG_SHELL
+STATIC VOID OsShmInfoCmd(VOID)
+{
+    INT32 i;
+    struct shmIDSource *seg = NULL;
+
+    PRINTK("\r\n------- Shared Memory Segments -------\n");
+    PRINTK("key      shmid    perms      bytes      nattch     status     owner\n");
+    SYSV_SHM_LOCK();
+    for (i = 0; i < g_shmInfo.shmmni; i++) {
+        seg = &g_shmSegs[i];
+        if (!(seg->status & SHM_SEG_USED)) {
+            continue;
+        }
+        PRINTK("%08x %-8d %-10o %-10u %-10u %-10x %s\n", seg->ds.shm_perm.key,
+               i, seg->ds.shm_perm.mode, seg->ds.shm_segsz, seg->ds.shm_nattch,
+               seg->status, seg->ownerName);
+
+    }
+    SYSV_SHM_UNLOCK();
+}
+
+STATIC VOID OsShmDeleteCmd(INT32 shmid)
+{
+    struct shmIDSource *seg = NULL;
+
+    if ((shmid < 0) || (shmid >= g_shmInfo.shmmni)) {
+        PRINT_ERR("shmid is invalid: %d\n", shmid);
+        return;
+    }
+
+    SYSV_SHM_LOCK();
+    seg = ShmFindSeg(shmid);
+    if (seg == NULL) {
+        SYSV_SHM_UNLOCK();
+        return;
+    }
+
+    if (seg->ds.shm_nattch <= 0) {
+        ShmFreeSeg(seg);
+    }
+    SYSV_SHM_UNLOCK();
+}
+
+STATIC VOID OsShmCmdUsage(VOID)
+{
+    PRINTK("\tnone option,   print shm usage info\n"
+           "\t-r [shmid],    Recycle the specified shared memory about shmid\n"
+           "\t-h | --help,   print shm command usage\n");
+}
+
+UINT32 OsShellCmdShm(INT32 argc, const CHAR *argv[])
+{
+    INT32 shmid;
+    CHAR *endPtr = NULL;
+
+    if (argc == 0) {
+        OsShmInfoCmd();
+    } else if (argc == 1) {
+        if ((strcmp(argv[0], "-h") != 0) && (strcmp(argv[0], "--help") != 0)) {
+            PRINTK("Invalid option: %s\n", argv[0]);
+        }
+        OsShmCmdUsage();
+    } else if (argc == 2) { /* 2: two parameter */
+        if (strcmp(argv[0], "-r") != 0) {
+            PRINTK("Invalid option: %s\n", argv[0]);
+            goto DONE;
+        }
+        shmid = strtoul((CHAR *)argv[1], &endPtr, 0);
+        if ((endPtr == NULL) || (*endPtr != 0)) {
+            PRINTK("check shmid %s(us) invalid\n", argv[1]);
+            goto DONE;
+        }
+        /* try to delete shm about shmid */
+        OsShmDeleteCmd(shmid);
+    }
+    return 0;
+DONE:
+    OsShmCmdUsage();
+    return -1;
+}
+
+SHELLCMD_ENTRY(shm_shellcmd, CMD_TYPE_SHOW, "shm", 2, (CmdCallBackFunc)OsShellCmdShm);
+#endif
+#endif
 
 #ifdef __cplusplus
 #if __cplusplus

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -40,7 +40,6 @@
 #include "string.h"
 #include "sched.h"
 
-#include "inode/inode.h"
 #include "errno.h"
 #include "stdlib.h"
 /****************************************************************************
@@ -52,11 +51,10 @@
 ****************************************************************************/
 
 #ifdef LOSCFG_FS_FAT_VIRTUAL_PARTITION
-//如果path是文件系统挂载点，执行其statfs方法
-int virstatfs(FAR const char *path, FAR struct statfs *buf)
+int virstatfs(const char *path,  struct statfs *buf)
 {
-  FAR struct inode *inode;
-  FAR const char   *relpath  = NULL;
+#ifdef VFS_IMPL_LATER
+   struct inode *inode = NULL;
   int              ret       = OK;
   char             *fullpath = NULL;
   struct inode_search_s desc;
@@ -75,7 +73,6 @@ int virstatfs(FAR const char *path, FAR struct statfs *buf)
       goto errout;
     }
 
-	//获取path所对应的全路径
   ret = vfs_normalize_path((const char *)NULL, path, &fullpath);
   if (ret < 0)
     {
@@ -84,7 +81,7 @@ int virstatfs(FAR const char *path, FAR struct statfs *buf)
     }
 
   /* Get an inode for this file */
-  SETUP_SEARCH(&desc, fullpath, false);  //查找此路径对应的文件索引节点
+  SETUP_SEARCH(&desc, fullpath, false);
   ret = inode_find(&desc);
   if (ret < 0)
     {
@@ -96,8 +93,7 @@ int virstatfs(FAR const char *path, FAR struct statfs *buf)
       free(fullpath);
       goto errout;
     }
-  inode = desc.node;  //查找成功
-  relpath = desc.relpath;  //相对路径
+  inode = desc.node;
 
   /* The way we handle the statfs depends on the type of inode that we
    * are dealing with.
@@ -110,12 +106,11 @@ int virstatfs(FAR const char *path, FAR struct statfs *buf)
       * supports the statfs() method
       */
 
-		//此目录为一个文件系统挂载点，检查是否支持statfs方法
-      if (inode->u.i_mops && inode->u.i_mops->virstatfs)
+      if (inode->u.i_mops)
         {
           /* Perform the statfs() operation */
-			//执行其statfs方法
-          ret = inode->u.i_mops->virstatfs(inode, relpath, buf);
+
+          ret = LOS_OK;
         }
       else
         {
@@ -152,5 +147,7 @@ errout_with_inode:
 errout:
   set_errno(ret);
   return VFS_ERROR;
+#endif
+  return 0;
 }
 #endif

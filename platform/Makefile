@@ -1,5 +1,5 @@
-# Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
-# Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+# Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+# Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without modification,
 # are permitted provided that the following conditions are met:
@@ -31,22 +31,11 @@ include $(LITEOSTOPDIR)/config.mk
 
 MODULE_NAME := bsp
 
-LOCAL_SRCS = $(wildcard $(HWI_SRC)/*.c) \
-            $(wildcard $(TIMER_SRC)/*.c) \
-            $(wildcard $(UART_SRC)/*.c) \
-            $(wildcard ./main.c)
-
-ifeq ($(LOSCFG_HRTIMER_ENABLE), y)
-LOCAL_SRCS += $(wildcard $(HRTIMER_SRC)/*.c)
-endif
+LOCAL_SRCS = $(wildcard ./main.c)
 
 LOCAL_INCLUDE += -I $(LITEOSTOPDIR)/compat/posix/src \
                  -I $(LITEOSTOPDIR)/bsd/dev/random
 
-MAIN_PLATFORMS := $(LOSCFG_PLATFORM_HI3518EV300) \
-                  $(LOSCFG_PLATFORM_HI3516DV300) \
-                  $(LOSCFG_PLATFORM_QEMU_ARM_VIRT_CA7)
-ifeq ($(findstring y, $(MAIN_PLATFORMS)), y)
 LOCAL_SRCS += $(wildcard ../kernel/common/*.c)
 LOCAL_SRCS := $(filter-out ../kernel/common/los_rootfs.c, $(LOCAL_SRCS))
 ifneq ($(LOSCFG_FS_VFS), y)
@@ -55,14 +44,7 @@ endif
 ifneq ($(LOSCFG_BASE_CORE_HILOG), y)
 LOCAL_SRCS := $(filter-out ../kernel/common/los_hilog.c, $(LOCAL_SRCS))
 endif
-else
-LOCAL_SRCS += $(wildcard ../kernel/common/los_config.c)
-LOCAL_SRCS += $(wildcard ../kernel/common/los_printf.c)
-endif
 
-ifeq ($(LOSCFG_DRIVERS_USB), y)
-LOCAL_SRCS += $(wildcard $(USB_SRC)/*.c)
-endif
 
 ifeq ($(LOSCFG_KERNEL_TICKLESS), y)
 LOCAL_INCLUDE += -I $(LITEOSTOPDIR)/kernel/extended/include

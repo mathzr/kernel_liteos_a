@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -34,8 +34,8 @@
  * @ingroup kernel
  */
 
-#include "los_typedef.h"
 #include "los_asid.h"
+#include "los_bitmap.h"
 #include "los_spinlock.h"
 #include "los_mmu_descriptor_v6.h"
 
@@ -45,6 +45,7 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+#ifdef LOSCFG_KERNEL_VM
 //地址空间ID管理
 STATIC SPIN_LOCK_INIT(g_cpuAsidLock); //多核互斥访问保护锁
 
@@ -78,6 +79,8 @@ VOID OsFreeAsid(UINT32 asid)
     LOS_BitmapClrNBits(g_asidPool, asid, 1);  //标记指定的地址空间ID不再使用
     LOS_SpinUnlockRestore(&g_cpuAsidLock, flags);
 }
+
+#endif
 
 #ifdef __cplusplus
 #if __cplusplus

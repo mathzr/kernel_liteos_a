@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -56,9 +56,6 @@ int Chdir(const char *tgtDir)
     if (ret == 0) {
 		//在shell中同步更新当前工作目录
         ret = OsShellSetWorkingDirtectory(tgtDir, strlen(tgtDir) + 1); /* 1: the length of '\0' */
-        if (ret != SH_NOK) {
-            return ret;
-        }
     }
 
     return ret;

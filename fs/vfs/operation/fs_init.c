@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -29,54 +29,63 @@
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "los_printf.h"
-#include "fs/fs.h"
-#include "inode/inode.h"
-#include "unistd.h"
-#include "fcntl.h"
-#include "sys/statfs.h"
-#include "linux/spinlock.h"
 #include "disk_pri.h"
+#include "fcntl.h"
+#include "fs/fs.h"
+#include "fs/fs_operation.h"
+#include "linux/spinlock.h"
+#include "los_printf.h"
+#include "fs/mount.h"
+#include "fs/path_cache.h"
+#include "sys/statfs.h"
+#include "unistd.h"
+#include "fs/vfs_util.h"
+#include "fs/vnode.h"
 
-//初始化虚拟文件系统
 void los_vfs_init(void)
 {
-    int err;
     uint retval;
     static bool g_vfs_init = false;
-    struct inode *dev = NULL;
-
     if (g_vfs_init) {
-        return;  //vfs不能重复初始化
+        return;
     }
 
 #ifdef LOSCFG_FS_FAT_DISK
-    spin_lock_init(&g_diskSpinlock);  //磁盘操作自旋锁初始化
-    spin_lock_init(&g_diskFatBlockSpinlock); //磁盘缓存操作自旋锁初始化
+    spin_lock_init(&g_diskSpinlock);
+    spin_lock_init(&g_diskFatBlockSpinlock);
 #endif
-    files_initlist(&tg_filelist);  //初始化全局已打开文件列表
-    fs_initialize(); //文件系统初始化
-    //注册根目录文件节点
-    if ((err = inode_reserve("/", &g_root_inode)) < 0) {
-        PRINT_ERR("los_vfs_init failed error %d\n", -err);
+    files_initialize();
+    files_initlist(&tg_filelist);
+
+    retval = VnodesInit();
+    if (retval != LOS_OK) {
+        PRINT_ERR("los_vfs_init VnodeInit failed error %d\n", retval);
         return;
     }
-	//设置根目录的权限，目录，创建者读写执行，同组读执行，其它读执行
-    g_root_inode->i_mode |= S_IFDIR | S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
 
-	//创建设备文件所在的目录  /dev
-    if ((err = inode_reserve("/dev", &dev)) < 0) {
-        PRINT_ERR("los_vfs_init failed error %d\n", -err);
+    retval = PathCacheInit();
+    if (retval != LOS_OK) {
+        PRINT_ERR("los_vfs_init PathCacheInit failed error %d\n", retval);
         return;
     }
-	//设置 /dev 权限， 目录，创建者读写执行，同组读执行，其它读执行
-    dev->i_mode |= S_IFDIR | S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
+    retval = VnodeHashInit();
+    if (retval != LOS_OK) {
+        PRINT_ERR("los_vfs_init VnodeHashInit failed error %d\n", retval);
+        return;
+    }
 
-    retval = init_file_mapping();  //初始化文件映射
+    retval = VnodeDevInit();
+    if (retval != LOS_OK) {
+        PRINT_ERR("los_vfs_init VnodeDevInit failed error %d\n", retval);
+        return;
+    }
+ 
+#ifdef LOSCFG_KERNEL_VM
+    retval = init_file_mapping();
     if (retval != LOS_OK) {
         PRINT_ERR("Page cache file map init failed\n");
         return;
     }
-
-    g_vfs_init = true; //标记虚拟文件系统初始化完成
+#endif
+    g_vfs_init = true;
 }

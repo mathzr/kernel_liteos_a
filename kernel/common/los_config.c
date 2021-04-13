@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -43,10 +43,10 @@
 #include "los_printf.h"
 #include "los_swtmr.h"
 #include "los_swtmr_pri.h"
-#include "los_timeslice_pri.h"
 #include "los_memory_pri.h"
 #include "los_sem_pri.h"
 #include "los_mux_pri.h"
+#include "los_rwlock_pri.h"
 #include "los_queue_pri.h"
 #include "los_memstat_pri.h"
 #include "los_hwi_pri.h"
@@ -77,14 +77,8 @@
 #ifdef LOSCFG_DRIVERS_HDF_PLATFORM_UART
 #include "console.h"
 #endif
-#ifdef LOSCFG_KERNEL_TICKLESS
-#include "los_tickless.h"
-#endif
 #ifdef LOSCFG_ARCH_CORTEX_M7
 #include "los_exc_pri.h"
-#endif
-#ifdef LOSCFG_MEM_RECORDINFO
-#include "los_memrecord_pri.h"
 #endif
 #include "los_hw_tick_pri.h"
 #include "los_hwi_pri.h"
@@ -123,22 +117,31 @@
 #include "los_hilog.h"
 #endif
 
+#ifdef LOSCFG_QUICK_START
+#include "los_quick_start_pri.h"
+#endif
+
 #ifdef __cplusplus
 #if __cplusplus
 extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
-extern UINT32 OsSystemInit(VOID);
+STATIC SystemRebootFunc g_rebootHook = NULL;
 
-VOID __attribute__((weak)) SystemInit(VOID)
+VOID OsSetRebootHook(SystemRebootFunc func)
 {
-	//只是一个弱引用函数的定义，及其它地方应该定义这个函数，如果没有定义
-	//会使用这个同名函数
-    PRINT_WARN("Function not implemented. Using weak reference stub\n");
+    g_rebootHook = func;
 }
 
-//记录时钟频率和tick频率
+SystemRebootFunc OsGetRebootHook(VOID)
+{
+    return g_rebootHook;
+}
+
+extern UINT32 OsSystemInit(VOID);
+extern VOID SystemInit(VOID);
+
 LITE_OS_SEC_TEXT_INIT VOID osRegister(VOID)
 {
     g_sysClock = OS_SYS_CLOCK;  //记录时钟主频
@@ -146,36 +149,6 @@ LITE_OS_SEC_TEXT_INIT VOID osRegister(VOID)
     g_tickPerSecond =  LOSCFG_BASE_CORE_TICK_PER_SECOND;
 
     return;
-}
-
-//启动操作系统
-LITE_OS_SEC_TEXT_INIT VOID OsStart(VOID)
-{
-    LosProcessCB *runProcess = NULL;
-    LosTaskCB *taskCB = NULL;
-    UINT32 cpuid = ArchCurrCpuid();
-
-    OsTickStart();  //系统开始计时
-
-    LOS_SpinLock(&g_taskSpin);
-    taskCB = OsGetTopTask();  //选择优先级最高的就绪任务
-
-    runProcess = OS_PCB_FROM_PID(taskCB->processID);
-    runProcess->processStatus |= OS_PROCESS_STATUS_RUNNING; //将进程置运行态
-#if (LOSCFG_KERNEL_SMP == YES)
-    /*
-     * attention: current cpu needs to be set, in case first task deletion
-     * may fail because this flag mismatch with the real current cpu.
-     */
-    taskCB->currCpu = cpuid; //记录下正在运行此任务的CPU
-    //更新进程中正在运行的任务数
-    runProcess->processStatus = OS_PROCESS_RUNTASK_COUNT_ADD(runProcess->processStatus);
-#endif
-
-    OS_SCHEDULER_SET(cpuid);  //标记本CPU参与任务调度
-
-    PRINTK("cpu %d entering scheduler\n", cpuid);
-    OsStartToRun(taskCB);   //然后开始运行这个任务
 }
 
 
@@ -235,7 +208,6 @@ LITE_OS_SEC_TEXT_INIT STATIC INT32 OsBsdInit(VOID)
 }
 #endif
 
-//主要的操作系统相关的初始化
 LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
 {
     UINT32 ret;
@@ -253,8 +225,10 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
     OsLkLoggerInit(NULL); //内核日志查看模块初始化
 #endif
 
-//异常状态下受限shell功能所使用的内存池
-//这个功能单独占一个内存池，便于不受另外一个内存池的故障
+#if (LOSCFG_KERNEL_TRACE == YES)
+    LOS_TraceInit();
+#endif
+
 #ifdef LOSCFG_EXC_INTERACTION
 #ifdef LOSCFG_ARCH_CORTEX_M7
     /* 4096: 4K space for Stack */
@@ -293,7 +267,8 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
         return ret;
     }
 
-#if ((LOSCFG_BASE_IPC_QUEUE == YES) || (LOSCFG_BASE_IPC_MUX == YES) || (LOSCFG_BASE_IPC_SEM == YES))
+#if ((LOSCFG_BASE_IPC_QUEUE == YES) || (LOSCFG_BASE_IPC_MUX == YES) || \
+     (LOSCFG_BASE_IPC_SEM == YES) || (LOSCFG_BASE_IPC_RWLOCK == YES))
     ret = OsIpcInit();
     if (ret != LOS_OK) {
         return ret;
@@ -306,9 +281,10 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
         PRINT_ERR("OsSysMemInit error\n");
         return ret;
     }
-
+	
+#ifdef LOSCFG_KERNEL_SYSCALL
     SyscallHandleInit(); //系统调用相关的初始化
-
+#endif
     /*
      * CPUP should be inited before first task creation which depends on the semaphore
      * when LOSCFG_KERNEL_SMP_TASK_SYNC is enabled. So don't change this init sequence
@@ -325,7 +301,7 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
     }
 #endif
 
-    ret = OsKernelInitProcess();  //创建内核态进程
+    ret = OsSystemProcessCreate();
     if (ret != LOS_OK) {
         return ret;
     }
@@ -366,24 +342,19 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
     if (ret != LOS_OK) {
         return ret;
     }
-
-#if LOSCFG_DRIVERS_HIEVENT
-    OsDriverHiEventInit();
-#endif
-
-#if (LOSCFG_KERNEL_TRACE == YES)
-    LOS_TraceInit();
-#endif
-
-#if (LOSCFG_KERNEL_LITEIPC == YES)
-    ret = LiteIpcInit();
+#if (LOSCFG_BASE_CORE_HILOG == YES)
+    ret = HiLogDriverInit();
     if (ret != LOS_OK) {
         return ret;
     }
 #endif
 
-#if (LOSCFG_BASE_CORE_HILOG == YES)
-    ret = HiLogDriverInit();
+#if LOSCFG_DRIVERS_HIEVENT
+    OsDriverHiEventInit();
+#endif
+
+#if (LOSCFG_KERNEL_LITEIPC == YES)
+    ret = LiteIpcInit();
     if (ret != LOS_OK) {
         return ret;
     }
@@ -395,7 +366,7 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
         return ret;
     }
 #endif
-
+#ifdef LOSCFG_KERNEL_VM
     ret = OsFutexInit();
     if (ret != LOS_OK) {
         PRINT_ERR("Create futex failed : %d!\n", ret);
@@ -406,7 +377,7 @@ LITE_OS_SEC_TEXT_INIT INT32 OsMain(VOID)
     if (ret != LOS_OK) {
         return ret;
     }
-
+#endif
     return LOS_OK;
 }
 
@@ -427,21 +398,14 @@ STATIC UINT32 OsSystemInitTaskCreate(VOID)
     return LOS_TaskCreate(&taskID, &sysTask);
 }
 
-#ifdef LOSCFG_MEM_RECORDINFO
-STATIC UINT32 OsMemShowTaskCreate(VOID)
+#ifdef LOSCFG_QUICK_START
+UINT32 OsSystemInitStep2(VOID)
 {
-    UINT32 taskID;
-    TSK_INIT_PARAM_S appTask;
-
-    (VOID)memset_s(&appTask, sizeof(TSK_INIT_PARAM_S), 0, sizeof(TSK_INIT_PARAM_S));
-    appTask.pfnTaskEntry = (TSK_ENTRY_FUNC)OsMemRecordShowTask;
-    appTask.uwStackSize = LOSCFG_BASE_CORE_TSK_DEFAULT_STACK_SIZE;
-    appTask.pcName = "memshow_Task";
-    appTask.usTaskPrio = LOSCFG_BASE_CORE_TSK_DEFAULT_PRIO;
-    appTask.uwResved = LOS_TASK_STATUS_DETACHED;
-    return LOS_TaskCreate(&taskID, &appTask);
+    SystemInit2();
+    return 0;
 }
 #endif
+
 
 UINT32 OsSystemInit(VOID)
 {
@@ -456,17 +420,6 @@ UINT32 OsSystemInit(VOID)
     if (ret != LOS_OK) {
         return ret;
     }
-#ifdef LOSCFG_MEM_RECORDINFO
-    ret = OsMemShowTaskCreate();
-    if (ret != LOS_OK) {
-        PRINTK("create memshow_Task error %u\n", ret);
-        return ret;
-    }
-    PRINTK("create memshow_Task ok\n");
-#endif
-#ifdef LOSCFG_KERNEL_TICKLESS
-    LOS_TicklessEnable();
-#endif
 
     return 0;
 }

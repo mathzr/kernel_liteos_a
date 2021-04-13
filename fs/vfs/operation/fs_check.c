@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -42,98 +42,52 @@
 #include "sys/stat.h"
 #include "sys/prctl.h"
 #include "fs/dirent_fs.h"
-#include "inode/inode.h"
+#include "fs/vnode.h"
 
 /****************************************************************************
  * Name: fscheck
  ****************************************************************************/
- //针对路径名进行文件系统挂载点检查
-FAR int fscheck(FAR const char *path)
+int fscheck(const char *path)
 {
-    FAR struct inode *inode = NULL;
-    FAR struct fs_dirent_s *dir = NULL;
-    FAR const char *relpath = NULL;
     int ret;
-    char *fullpath = NULL;
-    char *fullpath_bak = NULL;
+    struct Vnode *vnode = NULL;
+    struct fs_dirent_s *dir = NULL;
 
-	//获取全路径
-    ret = vfs_normalize_path((const char *)NULL, path, &fullpath);
-    if (ret < 0) {
-        ret = -ret;
+    /* Find the node matching the path. */
+    VnodeHold();
+    ret = VnodeLookup(path, &vnode, 0);
+    if (ret != OK) {
+        VnodeDrop();
         goto errout;
     }
-    fullpath_bak = fullpath;  //先记录一下全路径名称字符串的首地址
 
-    inode_semtake();  //获取索引节点的信号量
-
-    if (!fullpath || *fullpath == 0) {
-        ret = EINVAL;
-        goto errout_with_semaphore;  //全路径不存在
-    } else {
-        /* We don't know what to do with relative pathes */
-
-        if (*fullpath != '/') {
-            ret = ENOTDIR;  //全路径不是以'/'开始，不合法
-            goto errout_with_semaphore;
-        }
-
-        /* Find the node matching the path. */
-		//根据全路径，搜索对应的文件索引节点
-        inode = inode_search((FAR
-        const char **)&fullpath, (FAR struct inode **)NULL, (FAR struct inode **)NULL, &relpath);
-    }
-
-    if (!inode) {
-        /* 'path' is not a directory.*/
-		//搜索失败
-        ret = ENOTDIR;
-        goto errout_with_semaphore;
-    }
-
-	//创建目录项
-    dir = (FAR struct fs_dirent_s *)zalloc(sizeof(struct fs_dirent_s));
+    dir = (struct fs_dirent_s *)zalloc(sizeof(struct fs_dirent_s));
     if (!dir) {
         /* Insufficient memory to complete the operation.*/
-
-        ret = ENOMEM;
-        goto errout_with_semaphore; //创建失败
+        ret = -ENOMEM;
+        VnodeDrop();
+        goto errout;
     }
 
-#ifndef CONFIG_DISABLE_MOUNTPOINT
-    if (INODE_IS_MOUNTPT(inode)) {
-		//搜索到的是一个目录，且其为一个文件系统挂载点
-        if (!inode->u.i_mops || !inode->u.i_mops->fscheck) {
-			//不是一个合法的挂载点
-            ret = ENOSYS;
-            goto errout_with_direntry;
-        }
-
-        /* Perform the fscheck() operation */
-		//对此挂载点做进一步检查
-        ret = inode->u.i_mops->fscheck(inode, relpath, dir);
+    if (vnode->vop && vnode->vop->Fscheck) {
+        ret = vnode->vop->Fscheck(vnode, dir);
         if (ret != OK) {
-            ret = -ret; //检查失败
+            VnodeDrop();
             goto errout_with_direntry;
         }
-    } else
-#endif
-    {
-        ret = EINVAL;  //不是文件系统挂载点
+    } else {
+        ret = -ENOSYS;
+        VnodeDrop();
         goto errout_with_direntry;
     }
-    inode_semgive();  //释放信号量
-    free(dir);        //释放目录项
-    free(fullpath_bak); //释放全路径名
+    VnodeDrop();
+
+    free(dir);
     return 0;
 
 errout_with_direntry:
     free(dir);
-
-errout_with_semaphore:
-    inode_semgive();
-    free(fullpath_bak);
 errout:
-    set_errno(ret);
-    return -1;
+    set_errno(-ret);
+    return VFS_ERROR;
 }

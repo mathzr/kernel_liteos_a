@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -66,11 +66,10 @@ extern "C" {
 #define CONSOLE_RD_NONBLOCK            0
 #define CONSOLE_SHELL_KEY_EVENT        0x112
 #define CONSOLE_SHELL_EXITED           0x400
-#define CONSOLE_FIFO_SIZE              1024
+#define CONSOLE_FIFO_SIZE              0x400
 #define CONSOLE_NUM                    2
 
-
-#define TELNET_CIRBUF_SIZE 0x2000
+#define CONSOLE_CIRCBUF_SIZE 0x400
 
 typedef struct {
     CirBuf cirBufCB;        /* Circular buffer CB */
@@ -83,7 +82,7 @@ typedef struct {
     UINT32 consoleSem;
     UINT32 shellEntryId;
     UINT32 consoleMask;
-    struct inode *devInode;
+    struct Vnode *devVnode;
     CHAR *name;
     INT32 fd;
     UINT32 refCount;

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -43,7 +43,9 @@
 #include "sys/uio.h"
 #include "poll.h"
 #include "sys/prctl.h"
+#ifdef LOSCFG_KERNEL_DYNLOAD
 #include "los_exec_elf.h"
+#endif
 #include "los_syscall.h"
 #include "dirent.h"
 #include "user_copy.h"
@@ -54,6 +56,8 @@
 #include "fs_file.h"
 #include "capability_type.h"
 #include "capability_api.h"
+
+#define HIGH_SHIFT_BIT 32
 
 static int UserPathCopy(const char *userPath, char **pathBuf)
 {
@@ -66,11 +70,11 @@ static int UserPathCopy(const char *userPath, char **pathBuf)
 
     ret = LOS_StrncpyFromUser(*pathBuf, userPath, PATH_MAX + 1);
     if (ret < 0) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, *pathBuf);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, *pathBuf);
         *pathBuf = NULL;
         return ret;
     } else if (ret > PATH_MAX) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, *pathBuf);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, *pathBuf);
         *pathBuf = NULL;
         return -ENAMETOOLONG;
     }
@@ -108,13 +112,13 @@ static int UserIovCopy(struct iovec **iovBuf, const struct iovec *iov, const int
     }
 
     if (LOS_ArchCopyFromUser(*iovBuf, iov, bufLen) != 0) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, *iovBuf);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, *iovBuf);
         return -EFAULT;
     }
 
     ret = UserIovItemCheck(*iovBuf, iovcnt);
     if (ret == 0) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, *iovBuf);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, *iovBuf);
         return -EFAULT;
     }
 
@@ -177,30 +181,27 @@ static int UserPoll(struct pollfd *fds, nfds_t nfds, int timeout)
     return ret;
 }
 
-static int FcntlDupFd(int fd, void *arg, int (*fcntl)(int, int, ...))
+static int FcntlDupFd(int sysfd, void *arg)
 {
-    int ret;
-    int minFd = MIN_START_FD;
     int leastFd = (intptr_t)arg;
+
+    if ((sysfd < 0) || (sysfd >= CONFIG_NFILE_DESCRIPTORS)) {
+        return -EBADF;
+    }
 
     if (CheckProcessFd(leastFd) != OK) {
         return -EINVAL;
     }
+
     int procFd = AllocLowestProcessFd(leastFd);
     if (procFd < 0) {
         return -EMFILE;
     }
-    arg = (void *)minFd;
 
-    ret = fcntl(fd, F_DUPFD, arg);
-    if (ret < 0) {
-        FreeProcessFd(procFd);
-        return -get_errno();
-    }
-    AssociateSystemFd(procFd, ret);
-    ret = procFd;
+    files_refer(sysfd);
+    AssociateSystemFd(procFd, sysfd);
 
-    return ret;
+    return procFd;
 }
 
 int SysClose(int fd)
@@ -266,47 +267,50 @@ ssize_t SysWrite(int fd, const void *buf, size_t nbytes)
 int SysOpen(const char *path, int oflags, ...)
 {
     int ret;
-    mode_t mode;
+    int procFd;
+    mode_t mode = DEFAULT_FILE_MODE; /* 0666: File read-write properties. */
     char *pathRet = NULL;
-    int procFd = -1;
 
-    if (path != NULL) {
-        ret = UserPathCopy(path, &pathRet);
-        if (ret != 0) {
-            goto OUT;
-        }
+    if (path == NULL && *path == 0) {
+        return -EINVAL;
+    }
+
+    ret = UserPathCopy(path, &pathRet);
+    if (ret != 0) {
+        return ret;
     }
 
     procFd = AllocProcessFd();
-    if (procFd  < 0) {
+    if (procFd < 0) {
         ret = -EMFILE;
-        goto OUT;
+        goto ERROUT;
     }
 
     if ((unsigned int)oflags & O_DIRECTORY) {
         ret = do_opendir(pathRet, oflags);
-        if (ret < 0) {
-            ret = -get_errno();
-        }
-        goto OUT;
-    }
-
+    } else {
 #ifdef LOSCFG_FILE_MODE
-    va_list ap;
-
-    va_start(ap, oflags);
-    mode = va_arg(ap, int);
-    va_end(ap);
-#else
-    mode = 0666; /* 0666: File read-write properties. */
+        va_list ap;
+        va_start(ap, oflags);
+        mode = va_arg(ap, int);
+        va_end(ap);
 #endif
 
-    ret = do_open(AT_FDCWD, (path ? pathRet : NULL), oflags, mode);
-    if (ret < 0) {
-        ret = -get_errno();
+        ret = do_open(AT_FDCWD, pathRet, oflags, mode);
     }
 
-OUT:
+    if (ret < 0) {
+        ret = -get_errno();
+        goto ERROUT;
+    }
+
+    AssociateSystemFd(procFd, ret);
+    if (pathRet != NULL) {
+        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+    }
+    return procFd;
+
+ERROUT:
     if (pathRet != NULL) {
         LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
@@ -349,7 +353,7 @@ int SysCreat(const char *pathname, mode_t mode)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -373,15 +377,17 @@ int SysUnlink(const char *pathname)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
 
+#ifdef LOSCFG_KERNEL_DYNLOAD
 int SysExecve(const char *fileName, char *const *argv, char *const *envp)
 {
     return LOS_DoExecveFile(fileName, argv, envp);
 }
+#endif
 
 int SysChdir(const char *path)
 {
@@ -402,7 +408,7 @@ int SysChdir(const char *path)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -454,7 +460,7 @@ off64_t SysLseek64(int fd, int offsetHigh, int offsetLow, off64_t *result, int w
     off64_t ret;
     int retVal;
     struct file *filep = NULL;
-    off64_t offset = ((off64_t)offsetHigh << 32) + (uint)offsetLow; /* 32: offsetHigh is high 32 bits */
+    off64_t offset = ((off64_t)((UINT64)offsetHigh << 32)) + (uint)offsetLow; /* 32: offsetHigh is high 32 bits */
 
     /* Process fd convert to system global fd */
     fd = GetAssociatedSystemFd(fd);
@@ -569,10 +575,10 @@ int SysMount(const char *source, const char *target, const char *filesystemtype,
 
 OUT:
     if (sourceRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, sourceRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, sourceRet);
     }
     if (targetRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, targetRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, targetRet);
     }
     return ret;
 }
@@ -600,7 +606,7 @@ int SysUmount(const char *target)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -609,6 +615,7 @@ int SysAccess(const char *path, int amode)
 {
     int ret;
     struct stat buf;
+    struct statfs fsBuf;
     char *pathRet = NULL;
 
     if (path != NULL) {
@@ -618,9 +625,26 @@ int SysAccess(const char *path, int amode)
         }
     }
 
+    ret = statfs((path ? pathRet : NULL), &fsBuf);
+    if (ret != 0) {
+        ret = -get_errno();
+        if (ret != -ENOSYS) {
+            goto OUT;
+        } else {
+            /* dev has no statfs ops, need devfs to handle this in feature */
+            ret = LOS_OK;
+        }
+    }
+
+    if ((fsBuf.f_flags & MS_RDONLY) && ((unsigned int)amode & W_OK)) {
+        ret = -EROFS;
+        goto OUT;
+    }
+
     ret = stat((path ? pathRet : NULL), &buf);
     if (ret != 0) {
         ret = -get_errno();
+        goto OUT;
     }
 
     if (VfsPermissionCheck(buf.st_uid, buf.st_gid, buf.st_mode, amode)) {
@@ -629,7 +653,7 @@ int SysAccess(const char *path, int amode)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
 
     return ret;
@@ -663,10 +687,10 @@ int SysRename(const char *oldpath, const char *newpath)
 
 OUT:
     if (pathOldRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathOldRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathOldRet);
     }
     if (pathNewRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathNewRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathNewRet);
     }
     return ret;
 }
@@ -690,7 +714,7 @@ int SysMkdir(const char *pathname, mode_t mode)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -714,32 +738,27 @@ int SysRmdir(const char *pathname)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
 
 int SysDup(int fd)
 {
-    int ret = -1;
+    int sysfd = GetAssociatedSystemFd(fd);
+    /* Check if the param is valid, note that: socket fd is not support dup2 */
+    if ((sysfd < 0) || (sysfd >= CONFIG_NFILE_DESCRIPTORS)) {
+        return -EBADF;
+    }
 
-    int procFd = AllocProcessFd();
-    if (procFd  < 0) {
+    int dupfd = AllocProcessFd();
+    if (dupfd < 0) {
         return -EMFILE;
     }
 
-    /* Process fd convert to system global fd */
-    fd = GetAssociatedSystemFd(fd);
-
-    ret = dup(fd);
-    if (ret < 0) {
-        FreeProcessFd(procFd);
-        return -get_errno();
-    }
-
-    AssociateSystemFd(procFd, ret);
-
-    return procFd;
+    files_refer(sysfd);
+    AssociateSystemFd(dupfd, sysfd);
+    return dupfd;
 }
 
 void SysSync(void)
@@ -750,7 +769,7 @@ void SysSync(void)
 int SysUmount2(const char *target, int flags)
 {
     if (flags != 0) {
-        return -ENOSYS;
+        return -EINVAL;
     }
     return SysUmount(target);
 }
@@ -790,8 +809,9 @@ int SysFcntl(int fd, int cmd, void *arg)
     fd = GetAssociatedSystemFd(fd);
 
     if (cmd == F_DUPFD) {
-        return FcntlDupFd(fd, arg, fcntl);
+        return FcntlDupFd(fd, arg);
     }
+
     int ret = fcntl(fd, cmd, arg);
     if (ret < 0) {
         return -get_errno();
@@ -799,6 +819,7 @@ int SysFcntl(int fd, int cmd, void *arg)
     return ret;
 }
 
+#ifdef LOSCFG_KERNEL_PIPE
 int SysPipe(int pipefd[2]) /* 2 : pipe fds for read and write */
 {
     int ret;
@@ -839,6 +860,7 @@ int SysPipe(int pipefd[2]) /* 2 : pipe fds for read and write */
     }
     return ret;
 }
+#endif
 
 int SysDup2(int fd1, int fd2)
 {
@@ -892,21 +914,21 @@ static int SelectParamCheckCopy(fd_set *readfds, fd_set *writefds, fd_set *excep
 
     if (readfds != NULL) {
         if (LOS_ArchCopyFromUser(readfdsRet, readfds, sizeof(fd_set)) != 0) {
-            LOS_MemFree(OS_SYS_MEM_ADDR, *fdsBuf);
+            (void)LOS_MemFree(OS_SYS_MEM_ADDR, *fdsBuf);
             return -EFAULT;
         }
     }
 
     if (writefds != NULL) {
         if (LOS_ArchCopyFromUser(writefdsRet, writefds, sizeof(fd_set)) != 0) {
-            LOS_MemFree(OS_SYS_MEM_ADDR, *fdsBuf);
+            (void)LOS_MemFree(OS_SYS_MEM_ADDR, *fdsBuf);
             return -EFAULT;
         }
     }
 
     if (exceptfds != NULL) {
         if (LOS_ArchCopyFromUser(exceptfdsRet, exceptfds, sizeof(fd_set)) != 0) {
-            LOS_MemFree(OS_SYS_MEM_ADDR, *fdsBuf);
+            (void)LOS_MemFree(OS_SYS_MEM_ADDR, *fdsBuf);
             return -EFAULT;
         }
     }
@@ -941,7 +963,7 @@ int SysSelect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, st
     ret = do_select(nfds, (readfds ? readfdsRet : NULL), (writefds ? writefdsRet : NULL),
                  (exceptfds ? exceptfdsRet : NULL), (timeout ? (&timeoutRet) : NULL), UserPoll);
     if (ret < 0) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, fdsRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, fdsRet);
         return -get_errno();
     }
 
@@ -963,18 +985,18 @@ int SysSelect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, st
         }
     }
 
-    LOS_MemFree(OS_SYS_MEM_ADDR, fdsRet);
+    (void)LOS_MemFree(OS_SYS_MEM_ADDR, fdsRet);
     return ret;
 
 ERROUT:
-    LOS_MemFree(OS_SYS_MEM_ADDR, fdsRet);
+    (void)LOS_MemFree(OS_SYS_MEM_ADDR, fdsRet);
     return -EFAULT;
 }
 
 int SysTruncate(const char *path, off_t length)
 {
     int ret;
-    int fd = 0;
+    int fd = -1;
     char *pathRet = NULL;
 
     if (path != NULL) {
@@ -999,7 +1021,7 @@ int SysTruncate(const char *path, off_t length)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -1007,7 +1029,7 @@ OUT:
 int SysTruncate64(const char *path, off64_t length)
 {
     int ret;
-    int fd = 0;
+    int fd = -1;
     char *pathRet = NULL;
 
     if (path != NULL) {
@@ -1032,7 +1054,7 @@ int SysTruncate64(const char *path, off64_t length)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -1077,7 +1099,7 @@ int SysStatfs(const char *path, struct statfs *buf)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -1113,7 +1135,7 @@ int SysStatfs64(const char *path, size_t sz, struct statfs *buf)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -1144,7 +1166,7 @@ int SysStat(const char *path, struct stat *buf)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -1175,7 +1197,7 @@ int SysLstat(const char *path, struct stat *buffer)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -1410,17 +1432,17 @@ ssize_t SysPread64(int fd, void *buf, size_t nbytes, off64_t offset)
 
     ret = pread64(fd, (buf ? bufRet : NULL), nbytes, offset);
     if (ret < 0) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
         return -get_errno();
     }
 
     retVal = LOS_ArchCopyToUser(buf, bufRet, ret);
     if (retVal != 0) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
         return -EFAULT;
     }
 
-    LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
+    (void)LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
     return ret;
 }
 
@@ -1448,18 +1470,18 @@ ssize_t SysPwrite64(int fd, const void *buf, size_t nbytes, off64_t offset)
     if (buf != NULL) {
         ret = LOS_ArchCopyFromUser(bufRet, buf, nbytes);
         if (ret != 0) {
-            LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
+            (void)LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
             return -EFAULT;
         }
     }
 
     ret = pwrite64(fd, (buf ? bufRet : NULL), nbytes, offset);
     if (ret < 0) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
         return -get_errno();
     }
 
-    LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
+    (void)LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
     return ret;
 }
 
@@ -1477,18 +1499,18 @@ char *SysGetcwd(char *buf, size_t n)
 
     ret = getcwd((buf ? bufRet : NULL), n);
     if (ret == NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
         return (char *)(intptr_t)-get_errno();
     }
 
     retVal = LOS_ArchCopyToUser(buf, bufRet, n);
     if (retVal != 0) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
         return (char *)(intptr_t)-EFAULT;
     }
     ret = buf;
 
-    LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
+    (void)LOS_MemFree(OS_SYS_MEM_ADDR, bufRet);
     return ret;
 }
 
@@ -1567,7 +1589,7 @@ int SysOpenat(int dirfd, const char *path, int oflags, ...)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -1596,7 +1618,7 @@ int SysMkdirat(int dirfd, const char *pathname, mode_t mode)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -1625,7 +1647,7 @@ int SysUnlinkat(int dirfd, const char *pathname, int flag)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -1666,10 +1688,10 @@ int SysRenameat(int oldfd, const char *oldpath, int newdfd, const char *newpath)
 
 OUT:
     if (pathOldRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathOldRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathOldRet);
     }
     if (pathNewRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathNewRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathNewRet);
     }
     return ret;
 }
@@ -1702,8 +1724,11 @@ int SysFallocate64(int fd, int mode, off64_t offset, off64_t len)
     return ret;
 }
 
-ssize_t SysPreadv(int fd, const struct iovec *iov, int iovcnt, off_t offset)
+ssize_t SysPreadv(int fd, const struct iovec *iov, int iovcnt, long loffset, long hoffset)
 {
+    off_t offsetflag;
+    offsetflag = (off_t)((unsigned long long)loffset | (((unsigned long long)hoffset) << HIGH_SHIFT_BIT));
+
     int ret;
     int valid_iovcnt = -1;
     struct iovec *iovRet = NULL;
@@ -1711,7 +1736,7 @@ ssize_t SysPreadv(int fd, const struct iovec *iov, int iovcnt, off_t offset)
     /* Process fd convert to system global fd */
     fd = GetAssociatedSystemFd(fd);
     if ((iov == NULL) || (iovcnt <= 0) || (iovcnt > IOV_MAX)) {
-        ret = preadv(fd, iov, iovcnt, offset);
+        ret = preadv(fd, iov, iovcnt, offsetflag);
         return -get_errno();
     }
 
@@ -1725,18 +1750,20 @@ ssize_t SysPreadv(int fd, const struct iovec *iov, int iovcnt, off_t offset)
         goto OUT_FREE;
     }
 
-    ret = preadv(fd, iovRet, valid_iovcnt, offset);
+    ret = preadv(fd, iovRet, valid_iovcnt, offsetflag);
     if (ret < 0) {
         ret = -get_errno();
     }
 
 OUT_FREE:
-    (void)LOS_MemFree(OS_SYS_MEM_ADDR, iovRet);
+    (void)(void)LOS_MemFree(OS_SYS_MEM_ADDR, iovRet);
     return ret;
 }
 
-ssize_t SysPwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset)
+ssize_t SysPwritev(int fd, const struct iovec *iov, int iovcnt, long loffset, long hoffset)
 {
+    off_t offsetflag;
+    offsetflag = (off_t)((unsigned long long)loffset | (((unsigned long long)hoffset) << HIGH_SHIFT_BIT));
     int ret;
     int valid_iovcnt = -1;
     struct iovec *iovRet = NULL;
@@ -1744,7 +1771,7 @@ ssize_t SysPwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset)
     /* Process fd convert to system global fd */
     fd = GetAssociatedSystemFd(fd);
     if ((iov == NULL) || (iovcnt <= 0) || (iovcnt > IOV_MAX)) {
-        ret = pwritev(fd, iov, iovcnt, offset);
+        ret = pwritev(fd, iov, iovcnt, offsetflag);
         return -get_errno();
     }
 
@@ -1758,7 +1785,7 @@ ssize_t SysPwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset)
         goto OUT_FREE;
     }
 
-    ret = pwritev(fd, iovRet, valid_iovcnt, offset);
+    ret = pwritev(fd, iovRet, valid_iovcnt, offsetflag);
     if (ret < 0) {
         ret = -get_errno();
     }
@@ -1792,7 +1819,7 @@ int SysFormat(const char *dev, int sectors, int option)
 
 OUT:
     if (devRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, devRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, devRet);
     }
     return ret;
 }
@@ -1825,8 +1852,9 @@ int SysFcntl64(int fd, int cmd, void *arg)
     fd = GetAssociatedSystemFd(fd);
 
     if (cmd == F_DUPFD) {
-        return FcntlDupFd(fd, arg, fcntl64);
+        return FcntlDupFd(fd, arg);
     }
+
     int ret = fcntl64(fd, cmd, arg);
     if (ret < 0) {
         return -get_errno();
@@ -1836,7 +1864,7 @@ int SysFcntl64(int fd, int cmd, void *arg)
 
 int SysGetdents64(int fd, struct dirent *de_user, unsigned int count)
 {
-    if (!LOS_IsUserAddressRange((VADDR_T)de_user, count)) {
+    if (!LOS_IsUserAddressRange((VADDR_T)(UINTPTR)de_user, count)) {
         return -EFAULT;
     }
 
@@ -1850,7 +1878,7 @@ int SysGetdents64(int fd, struct dirent *de_user, unsigned int count)
         return ret;
     }
     if (de_knl != NULL) {
-        int cpy_ret = LOS_ArchCopyToUser(de_user, de_knl, sizeof(*de_knl));
+        int cpy_ret = LOS_ArchCopyToUser(de_user, de_knl, ret);
         if (cpy_ret != 0)
         {
             return -EFAULT;
@@ -1893,17 +1921,17 @@ char *SysRealpath(const char *path, char *resolved_path)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     if (resolved_pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, resolved_pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, resolved_pathRet);
     }
     return result;
 }
 
 int SysChmod(const char *pathname, mode_t mode)
 {
-    struct IATTR attr;
+    struct IATTR attr = {0};
     attr.attr_chg_mode = mode;
     attr.attr_chg_valid = CHG_MODE; /* change mode */
     int ret;
@@ -1923,7 +1951,7 @@ int SysChmod(const char *pathname, mode_t mode)
 
 OUT:
     if (pathRet != NULL) {
-        LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
     }
     return ret;
 }
@@ -1957,7 +1985,54 @@ int SysChown(const char *pathname, uid_t owner, gid_t group)
 
 OUT:
     if (pathRet != NULL) {
+        (void)LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+    }
+    return ret;
+}
+
+int SysFstatat64(int dirfd, const char *restrict path, struct stat *restrict buf, int flag)
+{
+    int ret;
+    struct stat bufRet = {0};
+    char *pathRet = NULL;
+    char *fullpath = NULL;
+
+    if (path != NULL) {
+        ret = UserPathCopy(path, &pathRet);
+        if (ret != 0) {
+            goto OUT;
+        }
+    }
+
+    if (dirfd != AT_FDCWD) {
+        /* Process fd convert to system global fd */
+        dirfd = GetAssociatedSystemFd(dirfd);
+    }
+
+    ret = vfs_normalize_pathat(dirfd, pathRet, &fullpath);
+    if (ret < 0) {
+        goto OUT;
+    }
+
+    ret = stat(fullpath, &bufRet);
+    if (ret < 0) {
+        ret = -get_errno();
+        goto OUT;
+    }
+
+    ret = LOS_ArchCopyToUser(buf, &bufRet, sizeof(struct stat));
+    if (ret != 0) {
+        ret = -EFAULT;
+        goto OUT;
+    }
+
+OUT:
+    if (pathRet != NULL) {
         LOS_MemFree(OS_SYS_MEM_ADDR, pathRet);
+    }
+
+    if (fullpath != NULL) {
+        free(fullpath);
     }
     return ret;
 }

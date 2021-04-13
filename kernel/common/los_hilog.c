@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -56,11 +56,11 @@ struct HiLogEntry {
 
 ssize_t HilogRead(struct file *filep, char __user *buf, size_t count);
 ssize_t HilogWrite(struct file *filep, const char __user *buf, size_t count);
-int HiLogOpen(FAR struct file *filep);
-int HiLogClose(FAR struct file *filep);
+int HiLogOpen(struct file *filep);
+int HiLogClose(struct file *filep);
 
-static ssize_t HiLogWrite(FAR struct file *filep, const char *buffer, size_t bufLen);
-static ssize_t HiLogRead(FAR struct file *filep, char *buffer, size_t bufLen);
+static ssize_t HiLogWrite(struct file *filep, const char *buffer, size_t bufLen);
+static ssize_t HiLogRead(struct file *filep, char *buffer, size_t bufLen);
 
 STATIC struct file_operations_vfs g_hilogFops = {
     HiLogOpen,  /* open */
@@ -76,7 +76,7 @@ STATIC struct file_operations_vfs g_hilogFops = {
     NULL, /* unlink */
 };
 
-FAR struct HiLogCharDevice {
+struct HiLogCharDevice {
     int flag;
     LosMux mtx;
     unsigned char *buffer;
@@ -92,13 +92,13 @@ static inline unsigned char *HiLogBufferHead(void)
     return g_hiLogDev.buffer + g_hiLogDev.headOffset;
 }
 
-int HiLogOpen(FAR struct file *filep)
+int HiLogOpen(struct file *filep)
 {
     (void)filep;
     return 0;
 }
 
-int HiLogClose(FAR struct file *filep)
+int HiLogClose(struct file *filep)
 {
     (void)filep;
     return 0;
@@ -127,16 +127,16 @@ static void HiLogBufferDec(size_t sz)
 static int HiLogBufferCopy(unsigned char *dst, unsigned dstLen, unsigned char *src, size_t srcLen)
 {
     int retval = -1;
-
     size_t minLen = (dstLen > srcLen) ? srcLen : dstLen;
 
-    if (LOS_IsUserAddressRange((VADDR_T)dst, minLen) && LOS_IsUserAddressRange((VADDR_T)src, minLen)) {
+    if (LOS_IsUserAddressRange((VADDR_T)(UINTPTR)dst, minLen) &&
+        LOS_IsUserAddressRange((VADDR_T)(UINTPTR)src, minLen)) {
         return retval;
     }
 
-    if (LOS_IsUserAddressRange((VADDR_T)dst, minLen)) {
+    if (LOS_IsUserAddressRange((VADDR_T)(UINTPTR)dst, minLen)) {
         retval = LOS_ArchCopyToUser(dst, src, minLen);
-    } else if (LOS_IsUserAddressRange((VADDR_T)src, minLen)) {
+    } else if (LOS_IsUserAddressRange((VADDR_T)(UINTPTR)src, minLen)) {
         retval = LOS_ArchCopyFromUser(dst, src, minLen);
     } else {
         retval = memcpy_s(dst, dstLen, src, srcLen);
@@ -161,13 +161,12 @@ static int HiLogReadRingBuffer(unsigned char *buffer, size_t bufLen)
     return retval;
 }
 
-static ssize_t HiLogRead(FAR struct file *filep, char *buffer, size_t bufLen)
+static ssize_t HiLogRead(struct file *filep, char *buffer, size_t bufLen)
 {
     size_t retval;
     struct HiLogEntry header;
 
     (void)filep;
-
     wait_event_interruptible(g_hiLogDev.wq, (g_hiLogDev.size > 0));
 
     (VOID)LOS_MuxAcquire(&g_hiLogDev.mtx);
@@ -263,6 +262,12 @@ int HiLogWriteInternal(const char *buffer, size_t bufLen)
 {
     struct HiLogEntry header;
     int retval;
+    LosTaskCB *runTask =  (LosTaskCB *)OsCurrTaskGet();
+
+    if ((g_hiLogDev.buffer == NULL) || (OS_INT_ACTIVE) || (runTask->taskStatus & OS_TASK_FLAG_SYSTEM_TASK)) {
+        PRINTK("%s\n", buffer);
+        return -EAGAIN;
+    }
 
     (VOID)LOS_MuxAcquire(&g_hiLogDev.mtx);
     HiLogCoverOldLog(bufLen);
@@ -296,7 +301,7 @@ out:
     return retval;
 }
 
-static ssize_t HiLogWrite(FAR struct file *filep, const char *buffer, size_t bufLen)
+static ssize_t HiLogWrite(struct file *filep, const char *buffer, size_t bufLen)
 {
     (void)filep;
     if (bufLen + sizeof(struct HiLogEntry) > HILOG_BUFFER) {

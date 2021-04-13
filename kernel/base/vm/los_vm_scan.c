@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -34,6 +34,8 @@
 
 #include "fs/file.h"
 #include "los_vm_filemap.h"
+
+#ifdef LOSCFG_KERNEL_VM
 
 /* unmap a lru page by map record info caller need lru lock */
 //取消某页缓存的文件映射
@@ -386,6 +388,8 @@ int OsTryShrinkMemory(size_t nPage)
 {
     return 0;  //没有页缓存的系统，则无回收机制
 }
+#endif
+
 #endif
 
 #endif

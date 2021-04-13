@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -49,6 +49,8 @@
 extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
+
+#ifdef LOSCFG_KERNEL_VM
 
 LITE_OS_SEC_BSS OomCB *g_oomCB = NULL;  //内存耗尽相关信息控制块
 static SPIN_LOCK_INIT(g_oomSpinLock);
@@ -153,13 +155,17 @@ LITE_OS_SEC_TEXT_MINOR BOOL OomCheckProcess(VOID)
     /* first we will check if we need to reclaim pagecache memory */
 	//先检查是否需要做页缓存回收，如果需要，做回收动作
     if (OomReclaimPageCache() == FALSE) {
-        goto NO_VICTIM_PROCESS; //没有触发回收
+        LOS_SpinUnlock(&g_oomSpinLock);
+        goto NO_VICTIM_PROCESS;
     }
 
     /* get free bytes */
     OsVmPhysUsedInfoGet(&usedPm, &totalPm);
 	//再看空闲内存是否还低于水线，
     isLowMemory = ((totalPm - usedPm) << PAGE_SHIFT) < g_oomCB->lowMemThreshold;
+
+    LOS_SpinUnlock(&g_oomSpinLock);
+
     if (isLowMemory) {
 		//如果仍然低，输出错误日志
         PRINTK("[oom] OS is in low memory state\n"
@@ -170,7 +176,6 @@ LITE_OS_SEC_TEXT_MINOR BOOL OomCheckProcess(VOID)
     }
 
 NO_VICTIM_PROCESS:
-    LOS_SpinUnlock(&g_oomSpinLock);
     return isLowMemory; //返回当前内存是否过低
 }
 
@@ -276,6 +281,8 @@ LITE_OS_SEC_TEXT_MINOR UINT32 OomTaskInit(VOID)
     return LOS_OK;
 #endif
 }
+
+#endif
 
 #ifdef __cplusplus
 #if __cplusplus

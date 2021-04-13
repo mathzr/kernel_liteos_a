@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -48,8 +48,13 @@ typedef struct VmPage {
 	//将此物理内存页放入某链表(某LRU链表)
 	//或者某空闲链表，
     LOS_DL_LIST         node;        /**< vm object dl list */
+<<<<<<< .mine
 	//未看到使用之处
     UINT32              index;       /**< vm page index to vm object */
+=======
+
+
+>>>>>>> .theirs
 	//此物理页的起始地址(物理地址)
     PADDR_T             physAddr;    /**< vm page physical addr */
 	//此物理内存页的引用计数，

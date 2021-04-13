@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -33,56 +33,51 @@
  * Included Files
  ****************************************************************************/
 
-#include "vfs_config.h"
-#include "sys/types.h"
 #include "assert.h"
 #include "errno.h"
 #include "fcntl.h"
+#include "fs/fs.h"
+#include "sys/types.h"
 #include "sched.h"
 #include "unistd.h"
-
-#include "inode/inode.h"
+#include "vfs_config.h"
 
 /****************************************************************************
  * Name: file_fallocate
  ****************************************************************************/
-//为文件分配连续的数据区域
-static ssize_t file_fallocate(FAR struct file *filep, int mode, off_t offset, off_t len)
+
+static ssize_t file_fallocate(struct file *filep, int mode, off_t offset, off_t len)
 {
-    FAR struct inode *inode = NULL;
     int ret;
-    int err;
 
     if (len <= 0) {
-        err = EINVAL; //数据区尺寸不合法
+        ret = EINVAL;
         goto errout;
     }
 
     /* Was this file opened for write access? */
+
     if (((unsigned int)(filep->f_oflags) & O_ACCMODE) == O_RDONLY) {
-        err = EACCES;  //文件不可写
+        ret = -EACCES;
         goto errout;
     }
 
-    /* Is a driver registered? Does it support the fallocate method? */
-    inode = filep->f_inode;
-    if (!inode || !inode->u.i_mops || !inode->u.i_mops->fallocate) {
-        err = EBADF;  //此文件对应的设备驱动不支持fallocate操作
+    if (!filep->ops || !filep->ops->fallocate) {
+        ret = -EBADF;
         goto errout;
     }
 
     /* Yes, then let the driver perform the fallocate */
-	//使用驱动提供的方法
-    ret = inode->u.i_mops->fallocate(filep, mode, offset, len);
+
+    ret = filep->ops->fallocate(filep, mode, offset, len);
     if (ret < 0) {
-        err = -ret;
         goto errout;
     }
 
     return ret;
 
 errout:
-    set_errno(err);
+    set_errno(-ret);
     return VFS_ERROR;
 }
 
@@ -107,11 +102,10 @@ errout:
  *
  ********************************************************************************************/
 
-//为文件申请一段连续的数据区域
 int fallocate(int fd, int mode, off_t offset, off_t len)
 {
 #if CONFIG_NFILE_DESCRIPTORS > 0
-    FAR struct file *filep = NULL;
+    struct file *filep = NULL;
 #endif
 
 /* Did we get a valid file descriptor? */
@@ -120,7 +114,7 @@ int fallocate(int fd, int mode, off_t offset, off_t len)
     if ((unsigned int)fd >= CONFIG_NFILE_DESCRIPTORS)
 #endif
     {
-        set_errno(EBADF);  //文件描述符越界
+        set_errno(EBADF);
         return VFS_ERROR;
     }
 
@@ -128,7 +122,7 @@ int fallocate(int fd, int mode, off_t offset, off_t len)
 
     /* The descriptor is in the right range to be a file descriptor... write to the file.*/
 
-    int ret = fs_getfilep(fd, &filep);  //获取文件控制块指针
+    int ret = fs_getfilep(fd, &filep);
     if (ret < 0)
       {
         /* The errno value has already been set */
@@ -137,12 +131,12 @@ int fallocate(int fd, int mode, off_t offset, off_t len)
 
     if (filep->f_oflags & O_DIRECTORY)
       {
-        set_errno(EBADF);  //不支持对目录做此操作
+        set_errno(EBADF);
         return VFS_ERROR;
       }
 
     /* Perform the fallocate operation using the file descriptor as an index */
-	//执行具体的alloc操作
+
     return file_fallocate(filep, mode, offset, len);
 #endif
 }

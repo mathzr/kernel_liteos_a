@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -43,12 +43,15 @@
 #include "fs/fs.h"
 #include "los_task.h"
 #include "los_memory_pri.h"
+#include "los_vm_boot.h"
 
 #ifdef __cplusplus
 #if __cplusplus
 extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
+
+#ifdef LOSCFG_KERNEL_VM
 
 #define VM_MAP_WASTE_MEM_LEVEL          (PAGE_SIZE >> 2)
 LosMux g_vmSpaceListMux; //下述链表的互斥锁
@@ -99,8 +102,13 @@ VOID *OsRegionRbGetKeyFn(LosRbNode *pstNode)
     return (VOID *)&region->range;
 }
 
+<<<<<<< .mine
 //红黑树节点比较函数
 ULONG_T OsRegionRbCmpKeyFn(VOID *pNodeKeyA, VOID *pNodeKeyB)
+=======
+ULONG_T OsRegionRbCmpKeyFn(const VOID *pNodeKeyA, const VOID *pNodeKeyB)
+
+>>>>>>> .theirs
 {
 	//对2个节点进行比较(即对2个内存区的地址范围的比较)
     LosVmMapRange rangeA = *(LosVmMapRange *)pNodeKeyA;
@@ -194,6 +202,14 @@ BOOL OsVMallocSpaceInit(LosVmSpace *vmSpace, VADDR_T *virtTtb)
     return OsVmSpaceInitCommon(vmSpace, virtTtb);
 }
 
+VOID OsKSpaceInit(VOID)
+{
+    OsVmMapInit();
+    OsKernVmSpaceInit(&g_kVmSpace, OsGFirstTableGet());
+    OsVMallocSpaceInit(&g_vMallocSpace, OsGFirstTableGet());
+}
+
+
 //用户态地址空间初始化
 BOOL OsUserVmSpaceInit(LosVmSpace *vmSpace, VADDR_T *virtTtb)
 {
@@ -217,13 +233,35 @@ BOOL OsUserVmSpaceInit(LosVmSpace *vmSpace, VADDR_T *virtTtb)
 }
 
 
-//内核地址空间初始化
-VOID OsKSpaceInit(VOID)
+
+LosVmSpace *OsCreateUserVmSapce(VOID)
 {
-    OsVmMapInit(); //初始化地址空间链表互斥锁
-    OsKernVmSpaceInit(&g_kVmSpace, OsGFirstTableGet()); //内核地址空间初始化
-    OsVMallocSpaceInit(&g_vMallocSpace, OsGFirstTableGet()); //vmalloc地址空间初始化
+    BOOL retVal = FALSE;
+
+    LosVmSpace *space = LOS_MemAlloc(m_aucSysMem0, sizeof(LosVmSpace));
+    if (space == NULL) {
+        return NULL;
+    }
+
+    VADDR_T *ttb = LOS_PhysPagesAllocContiguous(1);
+    if (ttb == NULL) {
+        (VOID)LOS_MemFree(m_aucSysMem0, space);
+        return NULL;
+    }
+
+    (VOID)memset_s(ttb, PAGE_SIZE, 0, PAGE_SIZE);
+    retVal = OsUserVmSpaceInit(space, ttb);
+    LosVmPage *vmPage = OsVmVaddrToPage(ttb);
+    if ((retVal == FALSE) || (vmPage == NULL)) {
+        (VOID)LOS_MemFree(m_aucSysMem0, space);
+        LOS_PhysPagesFreeContiguous(ttb, 1);
+        return NULL;
+    }
+    LOS_ListAdd(&space->archMmu.ptList, &(vmPage->node));
+
+    return space;
 }
+
 
 //检查地址空间合法性
 STATIC BOOL OsVmSpaceParamCheck(LosVmSpace *vmSpace)
@@ -307,14 +345,16 @@ STATUS_T LOS_VmSpaceClone(LosVmSpace *oldVmSpace, LosVmSpace *newVmSpace)
         if (newRegion == NULL) {
             VM_ERR("dup new region failed");
             ret = LOS_ERRNO_VM_NO_MEMORY;
-            goto ERR_CLONE_ASPACE;
+            break;
         }
 
+#ifdef LOSCFG_KERNEL_SHM
         if (oldRegion->regionFlags & VM_MAP_REGION_FLAG_SHM) {
 			//新内存区与原内存区共享物理内存的情况
             OsShmFork(newVmSpace, oldRegion, newRegion);
             continue;
         }
+#endif
 
         if (oldRegion == oldVmSpace->heap) {
 			//原内存区是堆区的情况，新内存区也要做堆区
@@ -359,12 +399,6 @@ STATUS_T LOS_VmSpaceClone(LosVmSpace *oldVmSpace, LosVmSpace *newVmSpace)
 #endif
         }
     RB_SCAN_SAFE_END(&oldVmSpace->regionRbTree, pstRbNode, pstRbNodeNext)
-    goto OUT_CLONE_ASPACE;
-ERR_CLONE_ASPACE:
-    if (LOS_VmSpaceFree(newVmSpace) != LOS_OK) {
-        VM_ERR("LOS_VmSpaceFree failed");
-    }
-OUT_CLONE_ASPACE:
     (VOID)LOS_MuxRelease(&oldVmSpace->regionMux);
     return ret;
 }
@@ -423,8 +457,13 @@ VADDR_T OsAllocRange(LosVmSpace *vmSpace, size_t len)
 				//当前内存区和下一个内存区之间无空洞--这里空洞的含义是这部分虚拟内存还未使用
                 continue;
             }
+<<<<<<< .mine
 			//有空洞
             if ((curEnd + len) <= nextStart) {
+=======
+            if ((nextStart - curEnd) >= len) {
+
+>>>>>>> .theirs
 				//空洞 >= len，使用此空洞
                 return curEnd; //找到一个还未分配的内存空洞，可以用来分配
             } else {
@@ -442,7 +481,7 @@ VADDR_T OsAllocRange(LosVmSpace *vmSpace, size_t len)
             if (nextStart < curEnd) {
                 continue; //无空洞
             }
-            if ((curEnd + len) <= nextStart) {
+            if ((nextStart - curEnd) >= len) {
                 return curEnd; //空洞满足要求，这个空洞也有可能是原第一个内存区之前的空间
             } else {
             	//空洞尺寸不够，继续寻找下一个空洞
@@ -453,7 +492,7 @@ VADDR_T OsAllocRange(LosVmSpace *vmSpace, size_t len)
 
 	//没有找到空洞的情况下，尝试在map内寻找
     nextStart = vmSpace->mapBase + vmSpace->mapSize;
-    if ((curEnd + len) <= nextStart) {
+    if ((nextStart >= curEnd) && ((nextStart - curEnd) >= len)) {
 		//在map区域的末尾找到了合适的空洞
         return curEnd;
     }
@@ -461,10 +500,17 @@ VADDR_T OsAllocRange(LosVmSpace *vmSpace, size_t len)
     return 0;
 }
 
+<<<<<<< .mine
 
 //分配用户指定的虚拟地址范围
 //如果此范围已占用，则先解除映射
 VADDR_T OsAllocSpecificRange(LosVmSpace *vmSpace, VADDR_T vaddr, size_t len)
+=======
+VADDR_T OsAllocSpecificRange(LosVmSpace *vmSpace, VADDR_T vaddr, size_t len, UINT32 regionFlags)
+
+
+
+>>>>>>> .theirs
 {
     STATUS_T status;
 
@@ -475,12 +521,16 @@ VADDR_T OsAllocSpecificRange(LosVmSpace *vmSpace, VADDR_T vaddr, size_t len)
     if ((LOS_RegionFind(vmSpace, vaddr) != NULL) ||
         (LOS_RegionFind(vmSpace, vaddr + len - 1) != NULL) ||
         (LOS_RegionRangeFind(vmSpace, vaddr, len - 1) != NULL)) {
-        //起始地址，结束地址，地址范围，只要其中一个已被占用。
-        //那么需要先取消映射
-        status = LOS_UnMMap(vaddr, len);
-        if (status != LOS_OK) {
-            VM_ERR("unmap specific range va: %#x, len: %#x failed, status: %d", vaddr, len, status);
+        if ((regionFlags & VM_MAP_REGION_FLAG_FIXED_NOREPLACE) != 0) {
             return 0;
+        } else if ((regionFlags & VM_MAP_REGION_FLAG_FIXED) != 0) {
+            status = LOS_UnMMap(vaddr, len);
+            if (status != LOS_OK) {
+                VM_ERR("unmap specific range va: %#x, len: %#x failed, status: %d", vaddr, len, status);
+                return 0;
+            }
+        } else {
+            return OsAllocRange(vmSpace, len);
         }
     }
 
@@ -584,8 +634,13 @@ LosVmMapRegion *LOS_RegionAlloc(LosVmSpace *vmSpace, VADDR_T vaddr, size_t len, 
         rstVaddr = OsAllocRange(vmSpace, len);
     } else {
         /* if it is already mmapped here, we unmmap it */
+<<<<<<< .mine
 		//用户指定要使用此虚拟地址范围，则需要先撤销地址范围原来的映射
         rstVaddr = OsAllocSpecificRange(vmSpace, vaddr, len);
+=======
+        rstVaddr = OsAllocSpecificRange(vmSpace, vaddr, len, regionFlags);
+
+>>>>>>> .theirs
         if (rstVaddr == 0) {
             VM_ERR("alloc specific range va: %#x, len: %#x failed", vaddr, len);
             goto OUT;
@@ -704,9 +759,14 @@ STATUS_T LOS_RegionFree(LosVmSpace *space, LosVmMapRegion *region)
         OsFilePagesRemove(space, region);
     } else
 #endif
+
+#ifdef LOSCFG_KERNEL_SHM
     if (OsIsShmRegion(region)) {
         OsShmRegionFree(space, region);
     } else if (LOS_IsRegionTypeDev(region)) {
+#else
+    if (LOS_IsRegionTypeDev(region)) {
+#endif
         OsDevPagesRemove(&space->archMmu, region->range.base, region->range.size >> PAGE_SHIFT);
     } else {
         OsAnonPagesRemove(&space->archMmu, region->range.base, region->range.size >> PAGE_SHIFT);
@@ -726,18 +786,27 @@ STATUS_T LOS_RegionFree(LosVmSpace *space, LosVmMapRegion *region)
 LosVmMapRegion *OsVmRegionDup(LosVmSpace *space, LosVmMapRegion *oldRegion, VADDR_T vaddr, size_t size)
 {
     LosVmMapRegion *newRegion = NULL;
+    UINT32 regionFlags;
 
     (VOID)LOS_MuxAcquire(&space->regionMux);
-	//新建地址范围为[vaddr, vaddr+size)的内存区
-    newRegion = LOS_RegionAlloc(space, vaddr, size, oldRegion->regionFlags, oldRegion->pgOff);
+    regionFlags = oldRegion->regionFlags;
+    if (vaddr == 0) {
+        regionFlags &= ~(VM_MAP_REGION_FLAG_FIXED | VM_MAP_REGION_FLAG_FIXED_NOREPLACE);
+    } else {
+        regionFlags |= VM_MAP_REGION_FLAG_FIXED;
+    }
+    newRegion = LOS_RegionAlloc(space, vaddr, size, regionFlags, oldRegion->pgOff);
     if (newRegion == NULL) {
         VM_ERR("LOS_RegionAlloc failed");
         goto REGIONDUPOUT;
     }
     newRegion->regionType = oldRegion->regionType; //复制内存区的类型
+
+#ifdef LOSCFG_KERNEL_SHM
     if (OsIsShmRegion(oldRegion)) {
         newRegion->shmid = oldRegion->shmid; //复制内存区的共享内存ID
     }
+#endif
 
 #ifdef LOSCFG_FS_VFS
     if (LOS_IsRegionTypeFile(oldRegion)) {
@@ -810,7 +879,11 @@ STATUS_T OsVmRegionAdjust(LosVmSpace *space, VADDR_T newRegionStart, size_t size
             return LOS_ERRNO_VM_NO_MEMORY;
         }
     }
+<<<<<<< .mine
 	
+=======
+
+>>>>>>> .theirs
     return LOS_OK;
 }
 
@@ -920,7 +993,7 @@ STATUS_T OsIsRegionCanExpand(LosVmSpace *space, LosVmMapRegion *region, size_t s
 	//获取当前内存区的下一个内存区
     nextRegion = (LosVmMapRegion *)LOS_RbSuccessorNode(&space->regionRbTree, &region->rbNode);
     /* if the gap is larger than size, then we can expand */
-    if ((nextRegion != NULL) && ((nextRegion->range.base - region->range.base ) >= size)) {
+    if ((nextRegion != NULL) && ((nextRegion->range.base - region->range.base) >= size)) {
 		//如果相邻2个内存区起始地址不低于size字节，当然本内存区可以扩展到size字节
         return LOS_OK;
     }
@@ -1030,7 +1103,7 @@ BOOL LOS_IsRangeInSpace(const LosVmSpace *space, VADDR_T vaddr, size_t size)
 //在地址空间中预留一段内存
 STATUS_T LOS_VmSpaceReserve(LosVmSpace *space, size_t size, VADDR_T vaddr)
 {
-    uint regionFlags;
+    UINT32 regionFlags = 0;
 
     if ((space == NULL) || (size == 0) || (!IS_PAGE_ALIGNED(vaddr) || !IS_PAGE_ALIGNED(size))) {
         return LOS_ERRNO_VM_INVALID_ARGS; //地址和尺寸都需要页对齐
@@ -1041,12 +1114,22 @@ STATUS_T LOS_VmSpaceReserve(LosVmSpace *space, size_t size, VADDR_T vaddr)
     }
 
     /* lookup how it's already mapped */
+<<<<<<< .mine
 	//获取此虚拟地址对应的内存页的映射标志
     LOS_ArchMmuQuery(&space->archMmu, vaddr, NULL, &regionFlags);
+=======
+    (VOID)LOS_ArchMmuQuery(&space->archMmu, vaddr, NULL, &regionFlags);
+
+>>>>>>> .theirs
 
     /* build a new region structure */
+<<<<<<< .mine
 	//使用指定地址范围重新创建内存区，使用原映射标志
     LosVmMapRegion *region = LOS_RegionAlloc(space, vaddr, size, regionFlags, 0);
+=======
+    LosVmMapRegion *region = LOS_RegionAlloc(space, vaddr, size, regionFlags | VM_MAP_REGION_FLAG_FIXED, 0);
+
+>>>>>>> .theirs
 
     return region ? LOS_OK : LOS_ERRNO_VM_NO_MEMORY;
 }
@@ -1087,8 +1170,23 @@ STATUS_T LOS_VaddrToPaddrMmap(LosVmSpace *space, VADDR_T vaddr, PADDR_T paddr, s
     }
 
     while (len > 0) {
+<<<<<<< .mine
         vmPage = LOS_VmPageGet(paddr); //分配内存页，用于映射内存区中的虚拟内存
         LOS_AtomicInc(&vmPage->refCounts); //增加物理内存页引用计数
+
+
+
+
+
+=======
+        vmPage = LOS_VmPageGet(paddr);
+        if (vmPage == NULL) {
+            LOS_RegionFree(space, region);
+            VM_ERR("Page is NULL");
+            return LOS_ERRNO_VM_NOT_VALID;
+        }
+        LOS_AtomicInc(&vmPage->refCounts);
+>>>>>>> .theirs
 
 		//执行内存页映射动作
         ret = LOS_ArchMmuMap(&space->archMmu, vaddr, paddr, 1, region->regionFlags);
@@ -1270,30 +1368,50 @@ DONE:
     (VOID)LOS_MuxRelease(&space->regionMux);
 }
 
+LosMux *OsGVmSpaceMuxGet(VOID)
+{
+	    return &g_vmSpaceListMux;
+}
+
+
 //申请大内存
 STATIC INLINE BOOL OsMemLargeAlloc(UINT32 size)
 {
-    UINT32 wasteMem;
+    if (g_kHeapInited == FALSE) {
+        return FALSE;
+    }
 
-    if (size < PAGE_SIZE) {
+    if (size < KMALLOC_LARGE_SIZE) {
         return FALSE; //超过1页的内存才算大内存
     }
-    wasteMem = ROUNDUP(size, PAGE_SIZE) - size; //为了满足页对齐而填充的字节数目
-    /* that is 1K ram wasted, waste too much mem ! */
-	//如果填充字节超过1K，那么我们不使用大内存申请算法
-    return (wasteMem < VM_MAP_WASTE_MEM_LEVEL);
+
+    return TRUE;
+
 }
+
+#else
+PADDR_T LOS_PaddrQuery(VOID *vaddr)
+{
+    if (!LOS_IsKernelAddress((VADDR_T)vaddr)) {
+        return 0;
+    }
+
+    return (PADDR_T)VMM_TO_DMA_ADDR((VADDR_T)vaddr);
+}
+#endif
 
 
 //在内核空间申请内存的函数
 VOID *LOS_KernelMalloc(UINT32 size)
 {
     VOID *ptr = NULL;
-
+#ifdef LOSCFG_KERNEL_VM
     if (OsMemLargeAlloc(size)) {
 		//如果浪费不太严重，以页为单位申请内存
         ptr = LOS_PhysPagesAllocContiguous(ROUNDUP(size, PAGE_SIZE) >> PAGE_SHIFT);
-    } else {
+    } else 
+#endif
+	{
     	//否则以字节为单位申请内存
         ptr = LOS_MemAlloc(OS_SYS_MEM_ADDR, size);
     }
@@ -1306,12 +1424,14 @@ VOID *LOS_KernelMalloc(UINT32 size)
 VOID *LOS_KernelMallocAlign(UINT32 size, UINT32 boundary)
 {
     VOID *ptr = NULL;
-
+#ifdef LOSCFG_KERNEL_VM
     if (OsMemLargeAlloc(size) && IS_ALIGNED(PAGE_SIZE, boundary)) {
 		//为了申请整页内存而浪费的字节数小于1K, 且内存对齐要求是页对齐
 		//那么采用申请连续内存页的方式
         ptr = LOS_PhysPagesAllocContiguous(ROUNDUP(size, PAGE_SIZE) >> PAGE_SHIFT);
-    } else {
+    } else 
+#endif
+	{
     	//否则，使用以字节为单位的内存申请方式
         ptr = LOS_MemAllocAlign(OS_SYS_MEM_ADDR, size, boundary);
     }
@@ -1324,6 +1444,8 @@ VOID *LOS_KernelMallocAlign(UINT32 size, UINT32 boundary)
 VOID *LOS_KernelRealloc(VOID *ptr, UINT32 size)
 {
     VOID *tmpPtr = NULL;
+
+	#ifdef LOSCFG_KERNEL_VM
     LosVmPage *page = NULL;
     errno_t ret;
 
@@ -1357,6 +1479,9 @@ VOID *LOS_KernelRealloc(VOID *ptr, UINT32 size)
             tmpPtr = LOS_MemRealloc(OS_SYS_MEM_ADDR, ptr, size);
         }
     }
+#else
+	tmpPtr = LOS_MemRealloc(OS_SYS_MEM_ADDR, ptr, size);
+#endif
 
     return tmpPtr;
 }
@@ -1365,7 +1490,7 @@ VOID *LOS_KernelRealloc(VOID *ptr, UINT32 size)
 VOID LOS_KernelFree(VOID *ptr)
 {
     UINT32 ret;
-
+#ifdef LOSCFG_KERNEL_VM
     if (OsMemIsHeapNode(ptr) == FALSE) {
 		//以页为单位的内存块
 		//则需要释放连续的内存页
@@ -1374,15 +1499,12 @@ VOID LOS_KernelFree(VOID *ptr)
             VM_ERR("KernelFree %p failed", ptr);
             return;
         }
-    } else {
+    } else 
+#endif
+	{
     	//否则释放堆空间中的内存块
         (VOID)LOS_MemFree(OS_SYS_MEM_ADDR, ptr);
     }
-}
-
-LosMux *OsGVmSpaceMuxGet(VOID)
-{
-    return &g_vmSpaceListMux;
 }
 
 #ifdef __cplusplus

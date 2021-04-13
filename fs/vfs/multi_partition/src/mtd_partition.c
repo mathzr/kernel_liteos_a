@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -29,9 +29,6 @@
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// https://www.cnblogs.com/jly594761082/p/10370791.html 
-// 上文可以了解MTD, NOR FLASH的关系
-
 #include "mtd_partition.h"
 #include "stdlib.h"
 #include "stdio.h"
@@ -39,10 +36,12 @@
 #include "mtd_list.h"
 #include "los_config.h"
 #include "los_mux.h"
-#include "inode/inode.h"
 
-#if defined(LOSCFG_FS_JFFS)
 #include "mtd_common.h"
+
+#ifdef LOSCFG_PLATFORM_QEMU_ARM_VIRT_CA7
+#include "cfiflash.h"
+#endif
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -53,20 +52,85 @@ extern "C" {
 #define DRIVER_NAME_ADD_SIZE    3
 pthread_mutex_t g_mtdPartitionLock = PTHREAD_MUTEX_INITIALIZER;
 
-static INT32 JffsLockInit(VOID) __attribute__((weakref("JffsMutexCreate")));
-static VOID JffsLockDeinit(VOID) __attribute__((weakref("JffsMutexDelete")));
+static VOID YaffsLockInit(VOID) __attribute__((weakref("yaffsfs_OSInitialisation")));
+static VOID YaffsLockDeinit(VOID) __attribute__((weakref("yaffsfs_OsDestroy")));
+static INT32 Jffs2LockInit(VOID) __attribute__((weakref("Jffs2MutexCreate")));
+static VOID Jffs2LockDeinit(VOID) __attribute__((weakref("Jffs2MutexDelete")));
 
-partition_param *g_spinorPartParam = NULL;  //分区参数
-mtd_partition *g_spinorPartitionHead = NULL; //分区表头部
+partition_param *g_nandPartParam = NULL;
+partition_param *g_spinorPartParam = NULL;
+mtd_partition *g_spinorPartitionHead = NULL;
+mtd_partition *g_nandPartitionHead = NULL;
 
 #define RWE_RW_RW 0755
 
-mtd_partition *GetSpinorPartitionHead(VOID) //获取分区表头部
+partition_param *GetNandPartParam(VOID)
+{
+    return g_nandPartParam;
+}
+
+partition_param *GetSpinorPartParam(VOID)
+{
+    return g_spinorPartParam;
+}
+
+mtd_partition *GetSpinorPartitionHead(VOID)
 {
     return g_spinorPartitionHead;
 }
 
-//初始化并行flash分区参数
+
+static VOID MtdNandParamAssign(partition_param *nandParam, const struct MtdDev *nandMtd)
+{
+    LOS_ListInit(&g_nandPartitionHead->node_info);
+    /*
+     * If the user do not want to use block mtd or char mtd ,
+     * you can change the NANDBLK_NAME or NANDCHR_NAME to NULL.
+     */
+    nandParam->flash_mtd = (struct MtdDev *)nandMtd;
+    nandParam->flash_ops = GetDevNandOps();
+    nandParam->char_ops = GetMtdCharFops();
+    nandParam->blockname = NANDBLK_NAME;
+    nandParam->charname = NANDCHR_NAME;
+    nandParam->partition_head = g_nandPartitionHead;
+    nandParam->block_size = nandMtd->eraseSize;
+}
+
+static VOID MtdDeinitNandParam(VOID)
+{
+    if (YaffsLockDeinit != NULL) {
+        YaffsLockDeinit();
+    }
+}
+
+static partition_param *MtdInitNandParam(partition_param *nandParam)
+{
+    struct MtdDev *nandMtd = GetMtd("nand");
+    if (nandMtd == NULL) {
+        return NULL;
+    }
+    if (nandParam == NULL) {
+        if (YaffsLockInit != NULL) {
+            YaffsLockInit();
+        }
+        nandParam = (partition_param *)zalloc(sizeof(partition_param));
+        if (nandParam == NULL) {
+            MtdDeinitNandParam();
+            return NULL;
+        }
+        g_nandPartitionHead = (mtd_partition *)zalloc(sizeof(mtd_partition));
+        if (g_nandPartitionHead == NULL) {
+            MtdDeinitNandParam();
+            free(nandParam);
+            return NULL;
+        }
+
+        MtdNandParamAssign(nandParam, nandMtd);
+    }
+
+    return nandParam;
+}
+
 static VOID MtdNorParamAssign(partition_param *spinorParam, const struct MtdDev *spinorMtd)
 {
     LOS_ListInit(&g_spinorPartitionHead->node_info);
@@ -75,57 +139,50 @@ static VOID MtdNorParamAssign(partition_param *spinorParam, const struct MtdDev 
      * you can change the SPIBLK_NAME or SPICHR_NAME to NULL.
      */
     spinorParam->flash_mtd = (struct MtdDev *)spinorMtd;
-#ifndef LOSCFG_PLATFORM_QEMU_ARM_VIRT_CA7  //QEMU模拟器
+#ifndef LOSCFG_PLATFORM_QEMU_ARM_VIRT_CA7
     spinorParam->flash_ops = GetDevSpinorOps();
     spinorParam->char_ops = GetMtdCharFops();
-    spinorParam->blockname = SPIBLK_NAME;  //mtd并行spi接口flash块设备
-    spinorParam->charname = SPICHR_NAME;   //mtd并行spi接口flash字符设备
-#else  //其它设备
-    extern struct block_operations *GetCfiBlkOps(void);
-    spinorParam->flash_ops = GetCfiBlkOps(); //块设备函数集
+    spinorParam->blockname = SPIBLK_NAME;
+    spinorParam->charname = SPICHR_NAME;
+#else
+    spinorParam->flash_ops = GetCfiBlkOps();
     spinorParam->char_ops = NULL;
-    spinorParam->blockname = "/dev/cfiflash";  //并行普通接口flash块设备
+    spinorParam->blockname = CFI_DRIVER;
     spinorParam->charname = NULL;
 #endif
-    spinorParam->partition_head = g_spinorPartitionHead;  //分区头
-    spinorParam->block_size = spinorMtd->eraseSize;  //块尺寸为擦除单位尺寸
+    spinorParam->partition_head = g_spinorPartitionHead;
+    spinorParam->block_size = spinorMtd->eraseSize;
 }
 
 static VOID MtdDeinitSpinorParam(VOID)
 {
-    if (JffsLockDeinit != NULL) {
-        JffsLockDeinit();
+    if (Jffs2LockDeinit != NULL) {
+        Jffs2LockDeinit();
     }
 }
 
-//初始化并行flash的分区参数
 static partition_param *MtdInitSpinorParam(partition_param *spinorParam)
 {
 #ifndef LOSCFG_PLATFORM_QEMU_ARM_VIRT_CA7
-    struct MtdDev *spinorMtd = GetMtd("spinor");  //读取mtd设备
+    struct MtdDev *spinorMtd = GetMtd("spinor");
 #else
-    extern struct MtdDev *GetCfiMtdDev(void);
-    struct MtdDev *spinorMtd = GetCfiMtdDev();   //读取mtd设备
+    struct MtdDev *spinorMtd = GetCfiMtdDev();
 #endif
     if (spinorMtd == NULL) {
         return NULL;
     }
     if (spinorParam == NULL) {
-		//参数不存在，则构造参数
-        if (JffsLockInit != NULL) {
-			//先初始化互斥锁
-            if (JffsLockInit() != 0) { /* create jffs2 lock failed */
+        if (Jffs2LockInit != NULL) {
+            if (Jffs2LockInit() != 0) { /* create jffs2 lock failed */
                 return NULL;
             }
         }
-		//申请内存
         spinorParam = (partition_param *)zalloc(sizeof(partition_param));
         if (spinorParam == NULL) {
             PRINT_ERR("%s, partition_param malloc failed\n", __FUNCTION__);
             MtdDeinitSpinorParam();
             return NULL;
         }
-		//构造首分区
         g_spinorPartitionHead = (mtd_partition *)zalloc(sizeof(mtd_partition));
         if (g_spinorPartitionHead == NULL) {
             PRINT_ERR("%s, mtd_partition malloc failed\n", __FUNCTION__);
@@ -134,18 +191,19 @@ static partition_param *MtdInitSpinorParam(partition_param *spinorParam)
             return NULL;
         }
 
-		//初始化分区参数
         MtdNorParamAssign(spinorParam, spinorMtd);
     }
 
-    return spinorParam;  //返回创建好的分区参数
+    return spinorParam;
 }
 
 /* According the flash-type to init the param of the partition. */
-//初始化分区参数，只支持spi和cfi的并行flash
 static INT32 MtdInitFsparParam(const CHAR *type, partition_param **fsparParam)
 {
-    if (strcmp(type, "spinor") == 0 || strcmp(type, "cfi-flash") == 0) {
+    if (strcmp(type, "nand") == 0) {
+        g_nandPartParam = MtdInitNandParam(g_nandPartParam);
+        *fsparParam = g_nandPartParam;
+    } else if (strcmp(type, "spinor") == 0 || strcmp(type, "cfi-flash") == 0) {
         g_spinorPartParam = MtdInitSpinorParam(g_spinorPartParam);
         *fsparParam = g_spinorPartParam;
     } else {
@@ -160,11 +218,13 @@ static INT32 MtdInitFsparParam(const CHAR *type, partition_param **fsparParam)
 }
 
 /* According the flash-type to deinit the param of the partition. */
-//删除分区参数
 static INT32 MtdDeinitFsparParam(const CHAR *type)
 {
-    if (strcmp(type, "spinor") == 0  || strcmp(type, "cfi-flash") == 0) {
-        MtdDeinitSpinorParam(); //删除分区参数
+    if (strcmp(type, "nand") == 0) {
+        MtdDeinitNandParam();
+        g_nandPartParam = NULL;
+    } else if (strcmp(type, "spinor") == 0 || strcmp(type, "cfi-flash") == 0) {
+        MtdDeinitSpinorParam();
         g_spinorPartParam = NULL;
     } else {
         return -EINVAL;
@@ -173,7 +233,6 @@ static INT32 MtdDeinitFsparParam(const CHAR *type)
     return ENOERR;
 }
 
-//添加分区时的参数检查
 static INT32 AddParamCheck(UINT32 startAddr,
                            const partition_param *param,
                            UINT32 partitionNum,
@@ -182,35 +241,32 @@ static INT32 AddParamCheck(UINT32 startAddr,
     UINT32 startBlk, endBlk;
     mtd_partition *node = NULL;
     if ((param->blockname == NULL) && (param->charname == NULL)) {
-        return -EINVAL;  //至少需要指定其中一个名称
+        return -EINVAL;
     }
 
     if ((length == 0) || (length < param->block_size) ||
         (((UINT64)(startAddr) + length) > param->flash_mtd->size)) {
-        return -EINVAL; //分区至少包含1个块，且分区地址范围不能越界
+        return -EINVAL;
     }
 
-	//地址和尺寸都对齐到block_size上
     ALIGN_ASSIGN(length, startAddr, startBlk, endBlk, param->block_size);
 
     if (startBlk > endBlk) {
-        return -EINVAL;  //起始块编号不能大于结束块编号
+        return -EINVAL;
     }
-	//遍历已有分区
     LOS_DL_LIST_FOR_EACH_ENTRY(node, &param->partition_head->node_info, mtd_partition, node_info) {
         if ((node->start_block != 0) && (node->patitionnum == partitionNum)) {
-            return -EINVAL;  //该分区已存在
+            return -EINVAL;
         }
         if ((startBlk > node->end_block) || (endBlk < node->start_block)) {
-            continue; //地址范围不能和已有分区重叠
+            continue;
         }
         return -EINVAL;
     }
 
-    return ENOERR;  //允许添加参数所描述的新分区
+    return ENOERR;
 }
 
-//注册块设备驱动的操作
 static INT32 BlockDriverRegisterOperate(mtd_partition *newNode,
                                         const partition_param *param,
                                         UINT32 partitionNum)
@@ -218,16 +274,13 @@ static INT32 BlockDriverRegisterOperate(mtd_partition *newNode,
     INT32 ret;
     size_t driverNameSize;
 
-	//必须指定块设备名
     if (param->blockname != NULL) {
-		//申请驱动文件名称字符串
         driverNameSize = strlen(param->blockname) + DRIVER_NAME_ADD_SIZE;
         newNode->blockdriver_name = (CHAR *)malloc(driverNameSize);
         if (newNode->blockdriver_name == NULL) {
             return -ENOMEM;
         }
 
-		//构造驱动文件名
         ret = snprintf_s(newNode->blockdriver_name, driverNameSize,
             driverNameSize - 1, "%s%u", param->blockname, partitionNum);
         if (ret < 0) {
@@ -236,7 +289,6 @@ static INT32 BlockDriverRegisterOperate(mtd_partition *newNode,
             return -ENAMETOOLONG;
         }
 
-		//注册块设备驱动
         ret = register_blockdriver(newNode->blockdriver_name, param->flash_ops,
             RWE_RW_RW, newNode);
         if (ret) {
@@ -246,13 +298,11 @@ static INT32 BlockDriverRegisterOperate(mtd_partition *newNode,
             return ret;
         }
     } else {
-        newNode->blockdriver_name = NULL;  //无块设备名时，也不会有块设备驱动文件名
+        newNode->blockdriver_name = NULL;
     }
     return ENOERR;
 }
 
-
-//字符驱动注册操作
 static INT32 CharDriverRegisterOperate(mtd_partition *newNode,
                                        const partition_param *param,
                                        UINT32 partitionNum)
@@ -261,14 +311,12 @@ static INT32 CharDriverRegisterOperate(mtd_partition *newNode,
     size_t driverNameSize;
 
     if (param->charname != NULL) {
-		//存在字符设备名称才注册对应的驱动
         driverNameSize = strlen(param->charname) + DRIVER_NAME_ADD_SIZE;
         newNode->chardriver_name = (CHAR *)malloc(driverNameSize);
         if (newNode->chardriver_name == NULL) {
             return -ENOMEM;
         }
 
-		//构造字符设备驱动文件名称
         ret = snprintf_s(newNode->chardriver_name, driverNameSize,
             driverNameSize - 1, "%s%u", param->charname, partitionNum);
         if (ret < 0) {
@@ -277,7 +325,6 @@ static INT32 CharDriverRegisterOperate(mtd_partition *newNode,
             return -ENAMETOOLONG;
         }
 
-		//注册驱动
         ret = register_driver(newNode->chardriver_name, param->char_ops, RWE_RW_RW, newNode);
         if (ret) {
             PRINT_ERR("register chardev partion error\n");
@@ -286,19 +333,16 @@ static INT32 CharDriverRegisterOperate(mtd_partition *newNode,
             return ret;
         }
     } else {
-        newNode->chardriver_name = NULL; //无设备明时，也不会有设备驱动文件名
+        newNode->chardriver_name = NULL;
     }
     return ENOERR;
 }
 
-
-//块设备驱动注销
 static INT32 BlockDriverUnregister(mtd_partition *node)
 {
     INT32 ret;
 
     if (node->blockdriver_name != NULL) {
-		//根据驱动文件名称注销驱动
         ret = unregister_blockdriver(node->blockdriver_name);
         if (ret == -EBUSY) {
             PRINT_ERR("unregister blkdev partion error:%d\n", ret);
@@ -310,13 +354,11 @@ static INT32 BlockDriverUnregister(mtd_partition *node)
     return ENOERR;
 }
 
-//字符设备驱动注销
 static INT32 CharDriverUnregister(mtd_partition *node)
 {
     INT32 ret;
 
     if (node->chardriver_name != NULL) {
-		//根据字符设备驱动文件名称来注销驱动
         ret = unregister_driver(node->chardriver_name);
         if (ret == -EBUSY) {
             PRINT_ERR("unregister chardev partion error:%d\n", ret);
@@ -333,7 +375,6 @@ static INT32 CharDriverUnregister(mtd_partition *node)
  * Attention: both startAddr and length should be aligned with block size.
  * If not, the actual start address and length won't be what you expected.
  */
- //添加flash分区
 INT32 add_mtd_partition(const CHAR *type, UINT32 startAddr,
                         UINT32 length, UINT32 partitionNum)
 {
@@ -342,7 +383,7 @@ INT32 add_mtd_partition(const CHAR *type, UINT32 startAddr,
     partition_param *param = NULL;
 
     if ((partitionNum >= CONFIG_MTD_PATTITION_NUM) || (type == NULL)) {
-        return -EINVAL; //分区号越界，或者类型未指定
+        return -EINVAL;
     }
 
     ret = pthread_mutex_lock(&g_mtdPartitionLock);
@@ -350,39 +391,34 @@ INT32 add_mtd_partition(const CHAR *type, UINT32 startAddr,
         PRINT_ERR("%s %d, mutex lock failed, error:%d\n", __FUNCTION__, __LINE__, ret);
     }
 
-    ret = MtdInitFsparParam(type, &param);  //根据分区类型获取分区参数
+    ret = MtdInitFsparParam(type, &param);
     if (ret != ENOERR) {
         goto ERROR_OUT;
     }
 
-    ret = AddParamCheck(startAddr, param, partitionNum, length); //检查分区参数，以及地址范围和分区号
+    ret = AddParamCheck(startAddr, param, partitionNum, length);
     if (ret != ENOERR) {
         goto ERROR_OUT;
     }
 
-	//创建新分区
     newNode = (mtd_partition *)zalloc(sizeof(mtd_partition));
     if (newNode == NULL) {
         (VOID)pthread_mutex_unlock(&g_mtdPartitionLock);
         return -ENOMEM;
     }
 
-	//初始化新分区
     PAR_ASSIGNMENT(newNode, length, startAddr, partitionNum, param->flash_mtd, param->block_size);
 
-	//注册对应的块设备驱动
     ret = BlockDriverRegisterOperate(newNode, param, partitionNum);
     if (ret) {
         goto ERROR_OUT1;
     }
 
-	//注册对应的字符设备驱动
     ret = CharDriverRegisterOperate(newNode, param, partitionNum);
     if (ret) {
         goto ERROR_OUT2;
     }
 
-	//将分区加入分区列表
     LOS_ListTailInsert(&param->partition_head->node_info, &newNode->node_info);
     (VOID)LOS_MuxInit(&newNode->lock, NULL);
 
@@ -401,38 +437,35 @@ ERROR_OUT:
     return ret;
 }
 
-//删除分区前的参数检查
 static INT32 DeleteParamCheck(UINT32 partitionNum,
                               const CHAR *type,
                               partition_param **param)
 {
-    if (strcmp(type, "spinor") == 0  || strcmp(type, "cfi-flash") == 0) {
-        *param = g_spinorPartParam;  //根据类型获得参数
+    if (strcmp(type, "nand") == 0) {
+        *param = g_nandPartParam;
+    } else if (strcmp(type, "spinor") == 0 || strcmp(type, "cfi-flash") == 0) {
+        *param = g_spinorPartParam;
     } else {
-        PRINT_ERR("type error \n");  //不支持的类型
+        PRINT_ERR("type error \n");
         return -EINVAL;
     }
 
-    if ((partitionNum >= CONFIG_MTD_PATTITION_NUM) || //分区号不合法
-        ((*param) == NULL) || ((*param)->flash_mtd == NULL)) { //类型参数获得的信息不合法
+    if ((partitionNum >= CONFIG_MTD_PATTITION_NUM) ||
+        ((*param) == NULL) || ((*param)->flash_mtd == NULL)) {
         return -EINVAL;
     }
     return ENOERR;
 }
 
-
-//注销分区对应的驱动
 static INT32 DeletePartitionUnregister(mtd_partition *node)
 {
     INT32 ret;
 
-	//注销分区的块设备驱动
     ret = BlockDriverUnregister(node);
     if (ret == -EBUSY) {
         return ret;
     }
 
-	//注销分区的字符设备驱动
     ret = CharDriverUnregister(node);
     if (ret == -EBUSY) {
         return ret;
@@ -441,7 +474,6 @@ static INT32 DeletePartitionUnregister(mtd_partition *node)
     return ENOERR;
 }
 
-//根据分区号获得分区节点
 static INT32 OsNodeGet(mtd_partition **node, UINT32 partitionNum, const partition_param *param)
 {
     LOS_DL_LIST_FOR_EACH_ENTRY(*node, &param->partition_head->node_info, mtd_partition, node_info) {
@@ -457,29 +489,25 @@ static INT32 OsNodeGet(mtd_partition **node, UINT32 partitionNum, const partitio
     return ENOERR;
 }
 
-//释放分区相关资源
 static INT32 OsResourceRelease(mtd_partition *node, const CHAR *type, partition_param *param)
 {
-    (VOID)LOS_MuxDestroy(&node->lock);  //删除分区节点互斥锁
-    LOS_ListDelete(&node->node_info); //分区节点从链表移除
+    (VOID)LOS_MuxDestroy(&node->lock);
+    LOS_ListDelete(&node->node_info);
     (VOID)memset_s(node, sizeof(mtd_partition), 0, sizeof(mtd_partition));
-    free(node); //释放分区节点
-    (VOID)FreeMtd(param->flash_mtd);  //释放mtd设备
+    free(node);
+    (VOID)FreeMtd(param->flash_mtd);
     if (LOS_ListEmpty(&param->partition_head->node_info)) {
-		//所有分区已删除
-        free(param->partition_head);  //释放分区队列头部
+        free(param->partition_head);
         param->partition_head = NULL;
-        free(param);  //释放分区参数
+        free(param);
 
         if (MtdDeinitFsparParam(type) != ENOERR) {
-            return -EINVAL; 
+            return -EINVAL;
         }
     }
     return ENOERR;
 }
 
-
-//删除flash分区
 INT32 delete_mtd_partition(UINT32 partitionNum, const CHAR *type)
 {
     INT32 ret;
@@ -495,7 +523,6 @@ INT32 delete_mtd_partition(UINT32 partitionNum, const CHAR *type)
         PRINT_ERR("%s %d, mutex lock failed, error:%d\n", __FUNCTION__, __LINE__, ret);
     }
 
-	//删除分区前检查
     ret = DeleteParamCheck(partitionNum, type, &param);
     if (ret) {
         PRINT_ERR("delete_mtd_partition param invalid\n");
@@ -503,14 +530,12 @@ INT32 delete_mtd_partition(UINT32 partitionNum, const CHAR *type)
         return ret;
     }
 
-	//根据分区号查询分区
     ret = OsNodeGet(&node, partitionNum, param);
     if (ret) {
         (VOID)pthread_mutex_unlock(&g_mtdPartitionLock);
-        return ret; //分区不存在
+        return ret;
     }
 
-	//注销分区对应的驱动
     ret = DeletePartitionUnregister(node);
     if (ret) {
         PRINT_ERR("DeletePartitionUnregister error:%d\n", ret);
@@ -518,7 +543,6 @@ INT32 delete_mtd_partition(UINT32 partitionNum, const CHAR *type)
         return ret;
     }
 
-	//释放分区资源
     ret = OsResourceRelease(node, type, param);
     if (ret) {
         PRINT_ERR("DeletePartitionUnregister error:%d\n", ret);
@@ -538,4 +562,3 @@ INT32 delete_mtd_partition(UINT32 partitionNum, const CHAR *type)
 }
 #endif /* __cplusplus */
 #endif /* __cplusplus */
-#endif

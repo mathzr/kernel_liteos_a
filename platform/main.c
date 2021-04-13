@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -30,14 +30,14 @@
  */
 
 #include "los_config.h"
-#include "los_task_pri.h"
-#include "los_swtmr_pri.h"
 #include "los_printf.h"
 #include "los_atomic.h"
-#include "gic_common.h"
-#include "uart.h"
 #include "los_process_pri.h"
+#include "los_task_pri.h"
+#include "los_swtmr_pri.h"
+#include "los_sched_pri.h"
 #include "los_arch_mmu.h"
+#include "gic_common.h"
 
 #if (LOSCFG_KERNEL_SMP == YES)
 STATIC Atomic g_ncpu = 1;
@@ -78,8 +78,9 @@ LITE_OS_SEC_TEXT_INIT VOID secondary_cpu_start(VOID)
 {
 #if (LOSCFG_KERNEL_SMP == YES)  //多核CPU的产品才支持这部分代码
     UINT32 cpuid = ArchCurrCpuid();
-
+	#ifdef LOSCFG_KERNEL_MMU
     OsArchMmuInitPerCPU();  //初始化本CPU的内存管理单元
+    #endif
 
     OsCurrTaskSet(OsGetMainTask());  //设置当前任务为mainTask[cpu]
 
@@ -92,9 +93,9 @@ LITE_OS_SEC_TEXT_INIT VOID secondary_cpu_start(VOID)
 
 	//设置当前进程为KProcess
     OsCurrProcessSet(OS_PCB_FROM_PID(OsGetKernelInitProcessID()));
-    OsSwtmrInit();  //初始化本CPU的软件定时器计时模块
-    OsIdleTaskCreate(); //初始化本CPU的idle线程
-    OsStart();  //让OS运行起来
+    OsSwtmrInit();
+    OsIdleTaskCreate();
+    OsSchedStart();
     while (1) {
         __asm volatile("wfi");  //循环等待中断信号
     }
@@ -137,7 +138,7 @@ LITE_OS_SEC_TEXT_INIT VOID release_secondary_cores(VOID)
 {
     UINT32 regval;
 
-    /* clear the slave cpu reset */
+    /* clear the second cpu reset status */
     READ_UINT32(regval, PERI_CRG30_BASE);
     CLEAR_RESET_REG_STATUS(regval);
     WRITE_UINT32(regval, PERI_CRG30_BASE);
@@ -187,7 +188,7 @@ LITE_OS_SEC_TEXT_INIT INT32 main(VOID)
 
     CPU_MAP_SET(0, OsHwIDGet());  //记录CPU的硬件ID
 
-    OsStart();  //让OS运行起来
+    OsSchedStart();
 
     while (1) {
         __asm volatile("wfi");

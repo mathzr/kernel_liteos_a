@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -39,7 +39,6 @@
 #include "errno.h"
 #include "fs/fs.h"
 
-#include "inode/inode.h"
 #include "stdlib.h"
 
 #include "string.h"
@@ -93,10 +92,10 @@
  *
  ****************************************************************************/
 
-//获取FAT磁盘卷标签
 int getlabel(const char *target, char *label)
 {
-    FAR struct inode *mountpt_inode = NULL;
+#ifdef VFS_IMPL_LATER
+    struct inode *mountpt_inode = NULL;
     int errcode = OK;
     int status;
     char *fullpath = NULL;
@@ -110,7 +109,7 @@ int getlabel(const char *target, char *label)
     }
 
     /* Get a absolute path */
-	//获得target对应的全路径
+
     errcode = vfs_normalize_path((const char *)NULL, target, &fullpath);
     if (errcode < 0) {
         errcode = -errcode;
@@ -118,24 +117,23 @@ int getlabel(const char *target, char *label)
     }
 
     /* Find the mountpt */
-    SETUP_SEARCH(&desc, fullpath, false); //查找目录
+    SETUP_SEARCH(&desc, fullpath, false);
     ret = inode_find(&desc);
     if (ret < 0) {
         errcode = EACCES;
         goto errout_with_fullpath;
     }
-    mountpt_inode = desc.node;  //查找成功
+    mountpt_inode = desc.node;
 
     /* Verfy the path is a mountpoint path or file path */
 
     if (!INODE_IS_MOUNTPT(mountpt_inode) && !INODE_IS_BLOCK(mountpt_inode)) {
-        errcode = EPERM;  //不是挂载点，也不是块设备节点
+        errcode = EPERM;
         goto errout_with_release;
     }
 
-    if (mountpt_inode->u.i_mops && mountpt_inode->u.i_mops->getlabel) {
-		//使用挂载的文件系统对应的getlabel方法
-        status = mountpt_inode->u.i_mops->getlabel(mountpt_inode->i_private, label);
+    if (mountpt_inode->u.i_mops) {
+        status = LOS_OK;
         if (status < 0) {
             /* The inode is unhappy with the blkdrvr for some reason */
 
@@ -159,4 +157,6 @@ errout_with_fullpath:
 errout:
     set_errno(errcode);
     return VFS_ERROR;
+#endif
+    return 0;
 }

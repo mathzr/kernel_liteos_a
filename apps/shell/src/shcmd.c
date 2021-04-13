@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -102,10 +102,9 @@ static int OsStrSeparateTabStrGet(const char **tabStr, CmdParsed *parsed, unsign
 		//空命令行或者以空格结尾的命令行
         *tabStr = "";  //那么在空字符串基础上做自动补全
     } else {
-    	//其它情况则在最后一个词组的基础上来补全
+        //其它情况则在最后一个词组的基础上来补全
     	//先按空格拆分成参数列表
-        if (OsCmdTokenSplit(shiftStr, ' ', parsed)) {
-            free(tempStr);
+        if (OsCmdParse(shiftStr, parsed)) {            free(tempStr);
             return (int)SH_ERROR;
         }
 		//最后一个参数就是我们需要的词组，基于这个词组做自动补全
@@ -512,7 +511,7 @@ unsigned int OsCmdKeyShift(const char *cmdKey, char *cmdOut, unsigned int size)
 	//用来存储中间结果
     output = (char *)malloc(len + 1);
     if (output == NULL) {
-        printf("malloc failure in %s[%d]", __FUNCTION__, __LINE__);
+        printf("malloc failure in %s[%d]\n", __FUNCTION__, __LINE__);
         return (unsigned int)SH_ERROR;
     }
 
@@ -573,13 +572,12 @@ unsigned int OsCmdKeyShift(const char *cmdKey, char *cmdOut, unsigned int size)
 //命令行自动补全功能
 int OsTabCompletion(char *cmdKey, unsigned int *len)
 {
-    int count;
+    int count;    
 
     if ((cmdKey == NULL) || (len == NULL)) {
         return (int)SH_ERROR;
     }
-	//命令行自动补全
-    count = OsTabMatchFile(cmdKey, len);
+        count = OsTabMatchFile(cmdKey, len);
 
     return count;
 }

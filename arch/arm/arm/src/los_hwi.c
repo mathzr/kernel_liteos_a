@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -31,11 +31,11 @@
 
 #include "los_hwi.h"
 #include "los_memory.h"
-#include "los_tickless_pri.h"
 #include "los_spinlock.h"
 #ifdef LOSCFG_KERNEL_CPUP
 #include "los_cpup_pri.h"
 #endif
+#include "los_sched_pri.h"
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -68,6 +68,11 @@ CHAR *OsGetHwiFormName(UINT32 index)
     return g_hwiFormName[index]; //获取某中断的名称
 }
 
+UINT32 LOS_GetSystemHwiMaximum(VOID)
+{
+    return OS_HWI_MAX_NUM;
+}
+
 typedef VOID (*HWI_PROC_FUNC0)(VOID);
 typedef VOID (*HWI_PROC_FUNC2)(INT32, VOID *);
 
@@ -77,17 +82,17 @@ VOID OsInterrupt(UINT32 intNum)
     HwiHandleForm *hwiForm = NULL;
     UINT32 *intCnt = NULL;
 
+    /* Must keep the operation at the beginning of the interface */
     intCnt = &g_intCount[ArchCurrCpuid()];
     *intCnt = *intCnt + 1;  //当前CPU核正在处理的中断数增加
+
+    OsSchedIrqStartTime();
 
 #ifdef LOSCFG_CPUP_INCLUDE_IRQ
     OsCpupIrqStart();  //本cpu中断运行开始时间记录
 #endif
 
-#ifdef LOSCFG_KERNEL_TICKLESS
-    OsTicklessUpdate(intNum);  //低功耗状态下中断特殊处理，其它中断照常处理，无时钟中断
-#endif
-    hwiForm = (&g_hwiForm[intNum]); //中断向量
+#endif    hwiForm = (&g_hwiForm[intNum]); //中断向量
     //接着处理具体中断
 #ifndef LOSCFG_NO_SHARED_IRQ
     while (hwiForm->pstNext != NULL) {  //如果是共享中断，则有多个处理函数
@@ -112,10 +117,13 @@ VOID OsInterrupt(UINT32 intNum)
 #endif
     ++g_hwiFormCnt[intNum];  //本中断号对应的中断处理次数增加
 
-    *intCnt = *intCnt - 1;  //本CPU当前正在处理中断减少
-#ifdef LOSCFG_CPUP_INCLUDE_IRQ
+    *intCnt = *intCnt - 1;#ifdef LOSCFG_CPUP_INCLUDE_IRQ
     OsCpupIrqEnd(intNum);  //本中断号运行时间停止统计
 #endif
+    OsSchedIrqUpdateUsedTime();
+
+    /* Must keep the operation at the end of the interface */
+    *intCnt = *intCnt - 1;
 }
 
 //中断参数拷贝

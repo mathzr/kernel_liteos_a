@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -38,21 +38,14 @@
 #include "linux/spinlock.h"
 
 /* open file table for process fd */
-//全系统的已打开文件的编号
 struct file_table_s {
-    signed short sysFd; /* system fd associate with the tg_filelist index */
+    intptr_t sysFd; /* system fd associate with the tg_filelist index */
 };
 
-//进程的文件描述符表
 struct fd_table_s {
-    unsigned int max_fds;  //描述符的最大数量
-    //进程描述符到系统描述符的映射
+    unsigned int max_fds;
     struct file_table_s *ft_fds; /* process fd array associate with system fd */
-	//打开的文件描述符集合
-    fd_set *open_fds;
-	//进程内文件描述符集合
-    fd_set *proc_fds; 
-	//用于互斥访问
+    fd_set *proc_fds;
     sem_t ft_sem; /* manage access to the file table */
 };
 
@@ -83,4 +76,5 @@ void delete_files_snapshot(struct files_struct *files);
 
 int alloc_fd(int minfd);
 
+void alloc_std_fd(struct fd_table_s *fdt);
 #endif

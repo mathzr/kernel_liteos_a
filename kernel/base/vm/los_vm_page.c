@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -41,6 +41,8 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+#ifdef LOSCFG_KERNEL_VM
+
 //物理内存页描述符数组
 LosVmPage *g_vmPageArray = NULL;
 //上述数组的尺寸,单位字节。每个物理内存页对应一个表项
@@ -56,6 +58,7 @@ STATIC VOID OsVmPageInit(LosVmPage *page, paddr_t pa, UINT8 segID)
     page->physAddr = pa; //内存页首地址(物理地址)
     page->segID = segID; //此内存页所在的段
     page->order = VM_LIST_ORDER_MAX; //虽然空闲，但不在空闲链表中
+    page->nPages = 0;
 }
 
 //将物理页数组放入空闲链表。
@@ -65,8 +68,21 @@ STATIC INLINE VOID OsVmPageOrderListInit(LosVmPage *page, size_t nPages)
     OsVmPhysPagesFreeContiguous(page, nPages);
 }
 
+<<<<<<< .mine
 
 //物理内存初始化
+
+
+
+
+=======
+#define VMPAGEINIT(page, pa, segID) do {    \
+    OsVmPageInit(page, pa, segID);          \
+    (page)++;                               \
+    (pa) += PAGE_SIZE;                      \
+} while (0)
+
+>>>>>>> .theirs
 VOID OsVmPageStartup(VOID)
 {
     struct VmPhysSeg *seg = NULL;
@@ -80,7 +96,12 @@ VOID OsVmPageStartup(VOID)
     OsVmPhysAreaSizeAdjust(ROUNDUP((g_vmBootMemBase - KERNEL_ASPACE_BASE), PAGE_SIZE));
 
 	//还剩余多少物理内存页
-    nPage = OsVmPhysPageNumGet();
+    /*
+     * Pages getting from OsVmPhysPageNumGet() interface here contain the memory
+     * struct LosVmPage occupied, which satisfies the equation:
+     * nPage * sizeof(LosVmPage) + nPage * PAGE_SIZE = OsVmPhysPageNumGet() * PAGE_SIZE.
+     */
+    nPage = OsVmPhysPageNumGet() * PAGE_SIZE / (sizeof(LosVmPage) + PAGE_SIZE);
 	//物理内存页描述符数组，每页内存一个描述符
     g_vmPageArraySize = nPage * sizeof(LosVmPage);
     g_vmPageArray = (LosVmPage *)OsVmBootMemAlloc(g_vmPageArraySize);
@@ -100,13 +121,47 @@ VOID OsVmPageStartup(VOID)
     for (segID = 0; segID < g_vmPhysSegNum; segID++) {
         seg = &g_vmPhysSeg[segID];
         nPage = seg->size >> PAGE_SHIFT;  //本物理地址段含有的内存页数目
+<<<<<<< .mine
         for (page = seg->pageBase, pa = seg->start; page <= seg->pageBase + nPage;
 		//遍历所有的页表项
              page++, pa += PAGE_SIZE) {
             OsVmPageInit(page, pa, segID); //初始页表项
+
+
+
+
+
+
+
+
+
+=======
+        UINT32 count = nPage >> 3; /* 3: 2 ^ 3, nPage / 8, cycle count */
+        UINT32 left = nPage & 0x7; /* 0x7: nPage % 8, left page */
+
+        for (page = seg->pageBase, pa = seg->start; count > 0; count--) {
+            /* note: process large amount of data, optimize performance */
+            VMPAGEINIT(page, pa, segID);
+            VMPAGEINIT(page, pa, segID);
+            VMPAGEINIT(page, pa, segID);
+            VMPAGEINIT(page, pa, segID);
+            VMPAGEINIT(page, pa, segID);
+            VMPAGEINIT(page, pa, segID);
+            VMPAGEINIT(page, pa, segID);
+            VMPAGEINIT(page, pa, segID);
+>>>>>>> .theirs
         }
+<<<<<<< .mine
 		//将所有的内存页存入空闲链(注意空闲链有多个)
         OsVmPageOrderListInit(seg->pageBase, nPage); 
+
+
+=======
+        for (; left > 0; left--) {
+            VMPAGEINIT(page, pa, segID);
+        }
+        OsVmPageOrderListInit(seg->pageBase, nPage);
+>>>>>>> .theirs
     }
 }
 
@@ -127,6 +182,8 @@ LosVmPage *LOS_VmPageGet(PADDR_T paddr)
 
     return page;
 }
+
+#endif
 
 #ifdef __cplusplus
 #if __cplusplus

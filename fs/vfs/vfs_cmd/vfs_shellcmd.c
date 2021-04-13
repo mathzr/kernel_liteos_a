@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -38,7 +38,6 @@
 #include "shell.h"
 #include "fs/fs.h"
 #include "sys/stat.h"
-#include "inode/inode.h"
 #include "stdlib.h"
 #include "unistd.h"
 #include "fs_other.h"
@@ -54,17 +53,17 @@
 
 #include "los_process_pri.h"
 #include <ctype.h>
+#include "fs/fs_operation.h"
 
 typedef enum
 {
-  RM_RECURSIVER, //递归删除
-  RM_FILE, //删除文件
-  RM_DIR,  //删除目录
-  CP_FILE, //拷贝文件
-  CP_COUNT //可拷贝文件数目
+  RM_RECURSIVER,
+  RM_FILE,
+  RM_DIR,
+  CP_FILE,
+  CP_COUNT
 } wildcard_type;
 
-//出错则退出
 #define ERROR_OUT_IF(condition, message_function, handler) \
   do \
     { \
@@ -75,15 +74,13 @@ typedef enum
         } \
     } \
   while (0)
-  	
-//设置错误号，输出出错信息
+
 static inline void set_err(int errcode, const char *err_message)
 {
   set_errno(errcode);
   perror(err_message);
 }
 
-//改变当前工作目录
 int osShellCmdDoChdir(const char *path)
 {
   char *fullpath = NULL;
@@ -98,23 +95,18 @@ int osShellCmdDoChdir(const char *path)
   if (path == NULL)
     {
       LOS_TaskLock();
-	  //没有指定目录，则输出当前工作目录的值
       PRINTK("%s\n", shell_working_directory);
       LOS_TaskUnlock();
 
       return 0;
     }
 
-	//检查目录路径长度合法性
   ERROR_OUT_IF(strlen(path) > PATH_MAX, set_err(ENOTDIR, "cd error"), return -1);
 
-	//规范化目录全路径名
   ret = vfs_normalize_path(shell_working_directory, path, &fullpath);
-	//失败则返回
   ERROR_OUT_IF(ret < 0, set_err(-ret, "cd error"), return -1);
 
   fullpath_bak = fullpath;
-  //修改工作目录
   ret = chdir(fullpath);
   if (ret < 0)
     {
@@ -126,7 +118,6 @@ int osShellCmdDoChdir(const char *path)
   /* copy full path to working directory */
 
   LOS_TaskLock();
-  //修改shell中保存的工作目录
   ret = strncpy_s(shell_working_directory, PATH_MAX, fullpath, strlen(fullpath));
   if (ret != EOK)
     {
@@ -142,7 +133,6 @@ int osShellCmdDoChdir(const char *path)
   return 0;
 }
 
-//ls命令入口
 int osShellCmdLs(int argc, const char **argv)
 {
   char *fullpath = NULL;
@@ -151,39 +141,36 @@ int osShellCmdLs(int argc, const char **argv)
   char *shell_working_directory = OsShellGetWorkingDirtectory();
   if (shell_working_directory == NULL)
     {
-      return -1;  //必须要有当前工作目录，才能正常使用ls命令
+      return -1;
     }
 
-	//ls后不能跟2个以上参数
   ERROR_OUT_IF(argc > 1, PRINTK("ls or ls [DIRECTORY]\n"), return -1);
 
   if (argc == 0)
     {
-      ls(shell_working_directory);  //没有指定目录，则显示当前工作目录的内容
+      ls(shell_working_directory);
       return 0;
     }
-  //指定了目录，则显示指定目录的内容
+
   filename = argv[0];
-  //先对用户指定的目录路径名做规范化处理
   ret = vfs_normalize_path(shell_working_directory, filename, &fullpath);
   ERROR_OUT_IF(ret < 0, set_err(-ret, "ls error"), return -1);
 
-  ls(fullpath); //并显示这个目录的内容
+  ls(fullpath);
   free(fullpath);
 
   return 0;
 }
 
-//cd命令入口
 int osShellCmdCd(int argc, const char **argv)
 {
   if (argc == 0)
     {
-      (void)osShellCmdDoChdir("/");  //不指定参数，直接切换到根目录
+      (void)osShellCmdDoChdir("/");
       return 0;
     }
 
-  (void)osShellCmdDoChdir(argv[0]);  //否则切换到参数所描述的目录
+  (void)osShellCmdDoChdir(argv[0]);
 
   return 0;
 }
@@ -193,105 +180,116 @@ int osShellCmdCd(int argc, const char **argv)
 #define CAT_TASK_STACK_SIZE  0x3000
 pthread_mutex_t g_mutex_cat = PTHREAD_MUTEX_INITIALIZER;
 
-//cat命令处理入口,本版本只支持一个文件名参数
 int osShellCmdDoCatShow(UINTPTR arg)
 {
+  int ret = 0;
   char buf[CAT_BUF_SIZE];
-  size_t size;
-  FILE *ini = NULL;
+  size_t size, writen, toWrite;
+  ssize_t cnt;
   char *fullpath = (char *)arg;
+  FILE *ini = NULL;
 
   (void)pthread_mutex_lock(&g_mutex_cat);
-  ini = fopen(fullpath, "r"); //打开文件
+  ini = fopen(fullpath, "r");
   if (ini == NULL)
     {
+      ret = -1;
       perror("cat error");
-      (void)pthread_mutex_unlock(&g_mutex_cat);
-      free(fullpath);
-      return -1; //打开失败
+      goto out;
     }
 
-  do //打开成功，则显示文件内容
+  do
     {
-      (void)memset_s(buf, sizeof(buf), 0, CAT_BUF_SIZE); //每次显示一部分
-      size = fread(buf, 1, CAT_BUF_SIZE, ini); //先从文件中读出一部分
+      (void)memset_s(buf, sizeof(buf), 0, CAT_BUF_SIZE);
+      size = fread(buf, 1, CAT_BUF_SIZE, ini);
       if ((int)size < 0)
         {
+          ret = -1;
           perror("cat error");
-          (void)pthread_mutex_unlock(&g_mutex_cat);
-          free(fullpath);
-          (void)fclose(ini);
-          return -1;  //读取失败
+          goto out_with_fclose;
         }
-      (void)write(1, buf, size);  //将读出的内容输出到屏幕上
-      (void)LOS_TaskDelay(1);  //休眠1ms后继续
-    }
-  while (size == CAT_BUF_SIZE); //只要本次读满了缓冲区，那么应该继续读(还未读完)
 
-  free(fullpath);
+      for (toWrite = size, writen = 0; toWrite > 0;)
+        {
+          cnt = write(1, buf + writen, toWrite);
+          if (cnt == 0)
+            {
+              /* avoid task-starvation */
+              (void)LOS_TaskDelay(1);
+              continue;
+            }
+          else if (cnt < 0)
+            {
+              perror("cat write error");
+              break;
+            }
+
+          writen += cnt;
+          toWrite -= cnt;
+        }
+    }
+  while (size > 0);
+
+out_with_fclose:
   (void)fclose(ini);
+out:
+  free(fullpath);
   (void)pthread_mutex_unlock(&g_mutex_cat);
-  return 0;
+  return ret;
 }
 
-//cat命令入口
 int osShellCmdCat(int argc, const char **argv)
 {
   char *fullpath = NULL;
-  const char *filename = NULL;
-  char *fullpath_bak = NULL;
-  FAR const char *relpath = NULL;
   int ret;
   unsigned int ca_task;
-  FAR struct inode *inode = NULL;
+  struct Vnode *vnode = NULL;
   TSK_INIT_PARAM_S init_param;
   char *shell_working_directory = OsShellGetWorkingDirtectory();
   if (shell_working_directory == NULL)
     {
-      return -1; //必须支持当前工作目录
+      return -1;
     }
 
-	//必须指定1个参数，只能指定一个参数
   ERROR_OUT_IF(argc != 1, PRINTK("cat [FILE]\n"), return -1);
 
-  filename = argv[0];
-  ret = vfs_normalize_path(shell_working_directory, filename, &fullpath);
-  //参数文件名必须正确
+  ret = vfs_normalize_path(shell_working_directory, argv[0], &fullpath);
   ERROR_OUT_IF(ret < 0, set_err(-ret, "cat error"), return -1);
 
-  inode_semtake();
-  fullpath_bak = fullpath;
-  inode = inode_search((FAR const char **)&fullpath, (FAR struct inode **)NULL, (FAR struct inode **)NULL, &relpath);
-  if (inode == NULL)
-    {
-    	//参数文件必须存在
-      set_errno(ENOENT);
-      perror("cat error");
-      inode_semgive();
-      free(fullpath_bak);
-      return -1;
-    }
-  if (INODE_IS_BLOCK(inode) || INODE_IS_DRIVER(inode))
-    {
-    	//不能是设备文件
-      set_errno(EPERM);
-      perror("cat error");
-      inode_semgive();
-      free(fullpath_bak);
-      return -1;
-    }
-  inode_semgive();
-  //另外启动一个线程来具体执行
+  VnodeHold();
+  ret = VnodeLookup(fullpath, &vnode, O_RDONLY);
+    if (ret != LOS_OK)
+      {
+        set_errno(-ret);
+        perror("cat error");
+        VnodeDrop();
+        free(fullpath);
+        return -1;
+      }
+    if (vnode->type != VNODE_TYPE_REG)
+      {
+        set_errno(EINVAL);
+        perror("cat error");
+        VnodeDrop();
+        free(fullpath);
+        return -1;
+      }
+  VnodeDrop();
   (void)memset_s(&init_param, sizeof(init_param), 0, sizeof(TSK_INIT_PARAM_S));
   init_param.pfnTaskEntry = (TSK_ENTRY_FUNC)osShellCmdDoCatShow;
   init_param.usTaskPrio   = CAT_TASK_PRIORITY;
-  init_param.auwArgs[0]   = (UINTPTR)fullpath_bak; //规范化后的全路径
+  init_param.auwArgs[0]   = (UINTPTR)fullpath;
   init_param.uwStackSize  = CAT_TASK_STACK_SIZE;
   init_param.pcName       = "shellcmd_cat";
-  init_param.uwResved     = LOS_TASK_STATUS_DETACHED | OS_TASK_FLAG_SPECIFIES_PROCESS; //线程执行完后自动删除
-  init_param.processID    = 2; /* 2: kProcess */  //归属于内核线程
+  init_param.uwResved     = LOS_TASK_STATUS_DETACHED | OS_TASK_FLAG_SPECIFIES_PROCESS;
+  init_param.processID    = 2; /* 2: kProcess */
 
   ret = (int)LOS_TaskCreate(&ca_task, &init_param);
+
+  if (ret != LOS_OK)
+    {
+      free(fullpath);
+    }
 
   return ret;
 }
@@ -299,22 +297,19 @@ int osShellCmdCat(int argc, const char **argv)
 static int nfs_mount_ref(const char *server_ip_and_path, const char *mount_path,
                          unsigned int uid, unsigned int gid) __attribute__((weakref("nfs_mount")));
 
-//获取文件系统挂载选项
 static unsigned long get_mountflags(const char *options)
 {
     unsigned long mountfalgs = 0;
     char *p;
-	//遍历以逗号分隔的选项字符串
     while ((options != NULL) && (p = strsep((char**)&options, ",")) != NULL) {
-		//转换成相关的标志位
         if (strncmp(p, "ro", strlen("ro")) == 0) {
-        mountfalgs |= MS_RDONLY; //只读
+        mountfalgs |= MS_RDONLY;
         } else if (strncmp(p, "rw", strlen("rw")) == 0) {
-            mountfalgs &= ~MS_RDONLY; //读写
+            mountfalgs &= ~MS_RDONLY;
         } else if (strncmp(p, "nosuid", strlen("nosuid")) == 0) {
-            mountfalgs |= MS_NOSUID;  //无suid权限
+            mountfalgs |= MS_NOSUID;
         } else if (strncmp(p, "suid", strlen("suid")) == 0) {
-            mountfalgs &= ~MS_NOSUID; //有suid权限
+            mountfalgs &= ~MS_NOSUID;
         } else {
             continue;
         }
@@ -322,14 +317,11 @@ static unsigned long get_mountflags(const char *options)
 
     return mountfalgs;
 }
-
-//mount命令使用提示
 static inline void print_mount_usage(void)
 {
   PRINTK("mount [DEVICE] [PATH] [NAME]\n");
 }
 
-//mount命令入口
 int osShellCmdMount(int argc, const char **argv)
 {
   int ret;
@@ -339,45 +331,35 @@ int osShellCmdMount(int argc, const char **argv)
   char *data = NULL;
   char *filessystemtype = NULL;
   unsigned long mountfalgs;
-  //当前进程工作目录
   char *shell_working_directory = OsShellGetWorkingDirtectory();
   if (shell_working_directory == NULL)
     {
-      return -1; //必须存在当前工作目录
+      return -1;
     }
 
-	//参数至少3个
   ERROR_OUT_IF(argc < 3, print_mount_usage(), return OS_FAIL);
 
   if (strncmp(argv[0], "-t", 2) == 0 || strncmp(argv[0], "-o", 2) == 0)
     {
-    	//存在-t -o参数时
       if (argc < 4)
         {
-        	//参数至少4个
           PRINTK("mount -t/-o [DEVICE] [PATH] [NAME]\n");
           return -1;
         }
 
-      filename = argv[2]; //第3个参数是需要挂载的目录
-      //规范化目录文件名全路径
+      filename = argv[2];
       ret = vfs_normalize_path(shell_working_directory, filename, &fullpath);
-	  //需要挂载的目录名不正确
       ERROR_OUT_IF(ret < 0, set_err(-ret, "mount error"), return -1);
 
       if (strncmp(argv[3], "nfs", 3) == 0)
         {
-        	//挂载成nfs文件系统
           if (argc <= 6)
             {
-            	//获取参数指定的uid
               uid = ((argc >= 5) && (argv[4] != NULL)) ? (unsigned int)strtoul(argv[4], (char **)NULL, 0) : 0;
-				//获取参数指定的gid
               gid = ((argc == 6) && (argv[5] != NULL)) ? (unsigned int)strtoul(argv[5], (char **)NULL, 0) : 0;
 
               if (nfs_mount_ref != NULL)
                 {
-                	//nfs挂载
                   ret = nfs_mount_ref(argv[1], fullpath, uid, gid);
                   if (ret != LOS_OK)
                     {
@@ -393,14 +375,10 @@ int osShellCmdMount(int argc, const char **argv)
             }
         }
 
-	  //其它文件系统类型
       filessystemtype = (argc >= 4) ? (char *)argv[3] : NULL; /* 3: fs type */
-	  //用户指定的挂载选项
       mountfalgs = (argc >= 5) ? get_mountflags((const char *)argv[4]) : 0; /* 4: usr option */
-	  //选项对应的数据
       data = (argc >= 6) ? (char *)argv[5] : NULL; /* 5: usr option data */
 
-		//执行具体挂载操作
       if (strcmp(argv[1], "0") == 0)
         {
           ret = mount((const char *)NULL, fullpath, filessystemtype, mountfalgs, data);
@@ -415,12 +393,11 @@ int osShellCmdMount(int argc, const char **argv)
         }
       else
         {
-          PRINTK("mount ok\n"); //挂载成功
+          PRINTK("mount ok\n");
         }
     }
   else
     {
-    	//无-t -o选项时，有少许不同
       filename = argv[1];
       ret = vfs_normalize_path(shell_working_directory, filename, &fullpath);
       ERROR_OUT_IF(ret < 0, set_err(-ret, "mount error"), return -1);
@@ -478,8 +455,6 @@ int osShellCmdMount(int argc, const char **argv)
   return 0;
 }
 
-
-//取消挂载命令入口
 int osShellCmdUmount(int argc, const char **argv)
 {
   int ret;
@@ -495,31 +470,28 @@ int osShellCmdUmount(int argc, const char **argv)
     }
   work_path = shell_working_directory;
 
-	//必须指定取消挂载的路径
   ERROR_OUT_IF(argc == 0, PRINTK("umount [PATH]\n"), return 0);
 
   filename = argv[0];
   ret = vfs_normalize_path(shell_working_directory, filename, &fullpath);
-  //路径名必须合法
   ERROR_OUT_IF(ret < 0, set_err(-ret, "umount error"), return -1);
 
   target_path = fullpath;
   cmp_num = strlen(fullpath);
   ret = strncmp(work_path, target_path, cmp_num);
-
   if (ret == 0)
     {
       work_path += cmp_num;
       if (*work_path == '/' || *work_path == '\0')
         {
-          set_errno(EBUSY);  //不能取消当前工作目录挂载的文件系统，需要先切换目录再umount
+          set_errno(EBUSY);
           perror("umount error");
           free(fullpath);
           return -1;
         }
     }
 
-  ret = umount(fullpath); //其它情况正常执行umount
+  ret = umount(fullpath);
   free(fullpath);
   if (ret != LOS_OK)
     {
@@ -531,7 +503,6 @@ int osShellCmdUmount(int argc, const char **argv)
   return 0;
 }
 
-//mkdir命令入口
 int osShellCmdMkdir(int argc, const char **argv)
 {
   int ret;
@@ -543,15 +514,12 @@ int osShellCmdMkdir(int argc, const char **argv)
       return -1;
     }
 
-	//需要指定即将创建的目录名
   ERROR_OUT_IF(argc != 1, PRINTK("mkdir [DIRECTORY]\n"), return 0);
 
   filename = argv[0];
-  //对目录名进行规范化处理
   ret = vfs_normalize_path(shell_working_directory, filename, &fullpath);
   ERROR_OUT_IF(ret < 0, set_err(-ret, "mkdir error"), return -1);
 
-	//创建目录，权限0777
   ret = mkdir(fullpath, S_IRWXU | S_IRWXG | S_IRWXO);
   if (ret == -1)
     {
@@ -561,29 +529,26 @@ int osShellCmdMkdir(int argc, const char **argv)
   return 0;
 }
 
-//pwd命令入口
 int osShellCmdPwd(int argc, const char **argv)
 {
   char buf[SHOW_MAX_LEN] = {0};
   DIR *dir = NULL;
-  char *shell_working_directory = OsShellGetWorkingDirtectory(); //获取当前工作目录
+  char *shell_working_directory = OsShellGetWorkingDirtectory();
   if (shell_working_directory == NULL)
     {
       return -1;
     }
 
-	//此命令无参数
   ERROR_OUT_IF(argc > 0, PRINTK("\nUsage: pwd\n"), return -1);
 
-  dir = opendir(shell_working_directory); //打开当前工作目录
+  dir = opendir(shell_working_directory);
   if (dir == NULL)
     {
-      perror("pwd error"); //打开失败
+      perror("pwd error");
       return -1;
     }
 
   LOS_TaskLock();
-  //拷贝工作目录路径字符串
   if (strncpy_s(buf, SHOW_MAX_LEN, shell_working_directory, SHOW_MAX_LEN - 1) != EOK)
     {
       LOS_TaskUnlock();
@@ -593,12 +558,11 @@ int osShellCmdPwd(int argc, const char **argv)
     }
   LOS_TaskUnlock();
 
-  PRINTK("%s\n", buf); //显示当前工作目录路径字符串
-  (void)closedir(dir); //关闭工作目录
+  PRINTK("%s\n", buf);
+  (void)closedir(dir);
   return 0;
 }
 
-//statfs命令使用帮助
 static inline void print_statfs_usage(void)
 {
   PRINTK("Usage  :\n");
@@ -608,7 +572,6 @@ static inline void print_statfs_usage(void)
   PRINTK("    statfs /ramfs\n");
 }
 
-//statfs命令入口
 int osShellCmdStatfs(int argc, const char **argv)
 {
   struct statfs sfs;
@@ -622,17 +585,15 @@ int osShellCmdStatfs(int argc, const char **argv)
       return -1;
     }
 
-	//需要指定一个参数
   ERROR_OUT_IF(argc != 1, PRINTK("statfs failed! Invalid argument!\n"), return -1);
 
   (void)memset_s(&sfs, sizeof(sfs), 0, sizeof(sfs));
 
   filename = argv[0];
-  //规范化路径名
   result = vfs_normalize_path(shell_working_directory, filename, &fullpath);
   ERROR_OUT_IF(result < 0, set_err(-result, "statfs error"), return -1);
 
-  result = statfs(fullpath, &sfs); //执行statfs具体处理
+  result = statfs(fullpath, &sfs);
   free(fullpath);
 
   if (result != 0 || sfs.f_type == 0)
@@ -644,7 +605,7 @@ int osShellCmdStatfs(int argc, const char **argv)
 
   total_size  = (unsigned long long)sfs.f_bsize * sfs.f_blocks;
   free_size   = (unsigned long long)sfs.f_bsize * sfs.f_bfree;
-	//输出查询到的信息
+
   PRINTK("statfs got:\n f_type     = %d\n cluster_size   = %d\n", sfs.f_type, sfs.f_bsize);
   PRINTK(" total_clusters = %llu\n free_clusters  = %llu\n", sfs.f_blocks, sfs.f_bfree);
   PRINTK(" avail_clusters = %llu\n f_namelen    = %d\n", sfs.f_bavail, sfs.f_namelen);
@@ -653,7 +614,6 @@ int osShellCmdStatfs(int argc, const char **argv)
   return 0;
 }
 
-//touch命令处理入口
 int osShellCmdTouch(int argc, const char **argv)
 {
   int ret;
@@ -666,15 +626,12 @@ int osShellCmdTouch(int argc, const char **argv)
       return -1;
     }
 
-	//需要指定文件名
   ERROR_OUT_IF(argc != 1, PRINTK("touch [FILE]\n"), return -1);
 
   filename = argv[0];
-  //文件路径名规范化处理
   ret = vfs_normalize_path(shell_working_directory, filename, &fullpath);
   ERROR_OUT_IF(ret < 0, set_err(-ret, "touch error"), return -1);
 
-	//创建文件
   fd = open(fullpath, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
   free(fullpath);
   if (fd == -1)
@@ -690,7 +647,6 @@ int osShellCmdTouch(int argc, const char **argv)
 #define CP_BUF_SIZE 4096
 pthread_mutex_t g_mutex_cp = PTHREAD_MUTEX_INITIALIZER;
 
-//执行文件内容拷贝
 static int os_shell_cmd_do_cp(const char *src_filepath, const char *dst_filename)
 {
   int  ret;
@@ -701,7 +657,8 @@ static int os_shell_cmd_do_cp(const char *src_filepath, const char *dst_filename
   char *buf = NULL;
   const char *filename = NULL;
   size_t r_size, w_size;
-  int src_fd, dst_fd;
+  int src_fd = -1;
+  int dst_fd = -1;
   struct stat stat_buf;
   mode_t src_mode;
   char *shell_working_directory = OsShellGetWorkingDirtectory();
@@ -808,7 +765,7 @@ static int os_shell_cmd_do_cp(const char *src_filepath, const char *dst_filename
       goto errout_with_mutex;
     }
 
-  dst_fd = open(dst_fullpath, O_CREAT | O_WRONLY, src_mode);
+  dst_fd = open(dst_fullpath, O_CREAT | O_WRONLY | O_TRUNC, src_mode);
   if (dst_fd < 0)
     {
       PRINTK("cp error: can't create %s. %s.\n", dst_fullpath, strerror(errno));
@@ -890,6 +847,12 @@ static int os_shell_cmd_do_rmdir(const char *pathname)
       if (strcmp(dirent->d_name, "..") && strcmp(dirent->d_name, "."))
         {
           size_t fullpath_buf_size = strlen(pathname) + strlen(dirent->d_name) + SEPARATOR_EOF_LEN;
+          if (fullpath_buf_size <= 0)
+            {
+              PRINTK("buffer size is invalid!\n");
+              (void)closedir(d);
+              return -1;
+            }
           fullpath = (char *)malloc(fullpath_buf_size);
           if (fullpath == NULL)
             {
@@ -1374,12 +1337,11 @@ int osShellCmdRmdir(int argc, const char **argv)
     {
       ret = rmdir(fullpath);
     }
-  free(fullpath);
-
   if (ret == -1)
     {
-      perror("rmdir error");
+      PRINTK("rmdir %s failed. Error: %s.\n", fullpath, strerror(errno));
     }
+  free(fullpath);
 
   return 0;
 }
@@ -1424,6 +1386,7 @@ int checkNum(const char *arg)
   return 0;
 }
 
+#ifdef LOSCFG_KERNEL_SYSCALL
 int osShellCmdSu(int argc, const char **argv)
 {
   unsigned int su_uid;
@@ -1453,7 +1416,7 @@ int osShellCmdSu(int argc, const char **argv)
   SysSetGroupID(su_gid);
   return 0;
 }
-
+#endif
 
 int osShellCmdChmod(int argc, const char **argv)
 {
@@ -1474,7 +1437,7 @@ int osShellCmdChmod(int argc, const char **argv)
     {
       if ((p[i] <= '7') && (p[i] >= '0'))
         {
-          mode = (mode << MODE_BIT) | (p[i] - '0');
+          mode = ((uint)mode << MODE_BIT) | (uint)(p[i] - '0');
         }
       else
         {
@@ -1602,14 +1565,14 @@ int osShellCmdChgrp(int argc, const char **argv)
 
 #ifdef LOSCFG_SHELL_CMD_DEBUG
 SHELLCMD_ENTRY(lsfd_shellcmd, CMD_TYPE_EX, "lsfd", XARGS, (CmdCallBackFunc)osShellCmdLsfd);
-#if (defined(LOSCFG_FS_FAT) || defined(LOSCFG_FS_RAMFS) ||  defined(LOSCFG_FS_JFFS))
 SHELLCMD_ENTRY(statfs_shellcmd, CMD_TYPE_EX, "statfs", XARGS, (CmdCallBackFunc)osShellCmdStatfs);
 SHELLCMD_ENTRY(touch_shellcmd, CMD_TYPE_EX, "touch", XARGS, (CmdCallBackFunc)osShellCmdTouch);
-#endif
 #if (defined(LOSCFG_FS_FAT))
 SHELLCMD_ENTRY(sync_shellcmd, CMD_TYPE_EX, "sync", XARGS, (CmdCallBackFunc)osShellCmdSync);
 #endif
+#ifdef LOSCFG_KERNEL_SYSCALL
 SHELLCMD_ENTRY(su_shellcmd, CMD_TYPE_EX, "su", XARGS, (CmdCallBackFunc)osShellCmdSu);
+#endif
 #endif
 SHELLCMD_ENTRY(ls_shellcmd, CMD_TYPE_EX, "ls", XARGS, (CmdCallBackFunc)osShellCmdLs);
 SHELLCMD_ENTRY(pwd_shellcmd, CMD_TYPE_EX, "pwd", XARGS, (CmdCallBackFunc)osShellCmdPwd);
@@ -1621,11 +1584,7 @@ SHELLCMD_ENTRY(mkdir_shellcmd, CMD_TYPE_EX, "mkdir", XARGS, (CmdCallBackFunc)osS
 SHELLCMD_ENTRY(chmod_shellcmd, CMD_TYPE_EX, "chmod", XARGS, (CmdCallBackFunc)osShellCmdChmod);
 SHELLCMD_ENTRY(chown_shellcmd, CMD_TYPE_EX, "chown", XARGS, (CmdCallBackFunc)osShellCmdChown);
 SHELLCMD_ENTRY(chgrp_shellcmd, CMD_TYPE_EX, "chgrp", XARGS, (CmdCallBackFunc)osShellCmdChgrp);
-#if (defined(LOSCFG_FS_FAT) || defined(LOSCFG_FS_RAMFS) ||  defined(LOSCFG_FS_JFFS))
 SHELLCMD_ENTRY(mount_shellcmd, CMD_TYPE_EX, "mount", XARGS, (CmdCallBackFunc)osShellCmdMount);
 SHELLCMD_ENTRY(umount_shellcmd, CMD_TYPE_EX, "umount", XARGS, (CmdCallBackFunc)osShellCmdUmount);
-#endif
-#if (defined(LOSCFG_FS_FAT) || defined(LOSCFG_FS_RAMFS) || defined(LOSCFG_FS_JFFS))
 SHELLCMD_ENTRY(cp_shellcmd, CMD_TYPE_EX, "cp", XARGS, (CmdCallBackFunc)osShellCmdCp);
-#endif
 #endif

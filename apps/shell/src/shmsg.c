@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -63,11 +63,20 @@ char *GetCmdline(ShellCB *shellCB)
 
 	//从队列中取出第一个命令
     cmdNode = SH_LIST_ENTRY(cmdkey->list.pstNext, CmdKeyLink, list);
+    if (cmdNode == NULL) {
+        (void)pthread_mutex_unlock(&shellCB->keyMutex);
+        return NULL;
+    }
+
     SH_ListDelete(&(cmdNode->list));
     (void)pthread_mutex_unlock(&shellCB->keyMutex);
 
-	//命令节点此时不能删除，因为后面还要用来保存为历史命令
-    return cmdNode->cmdString; //返回命令字符串
+    if (strlen(cmdNode->cmdString) == 0) {
+        free(cmdNode);
+        return NULL;
+    }
+
+    return cmdNode->cmdString;
 }
 
 
@@ -78,7 +87,8 @@ static void ShellSaveHistoryCmd(char *string, ShellCB *shellCB)
     CmdKeyLink *cmdkey = SH_LIST_ENTRY(string, CmdKeyLink, cmdString); //需要保存的命令节点
     CmdKeyLink *cmdNxt = NULL;
 
-    if ((string == NULL) || (*string == '\n') || (strlen(string) == 0)) {
+    if (*string == '\n') {
+        free(cmdkey);
         return;  //空命令不起作用，没有必要保存
     }
 
@@ -94,7 +104,7 @@ static void ShellSaveHistoryCmd(char *string, ShellCB *shellCB)
         }
     }
 
-    if (cmdHistory->count == CMD_HISTORY_LEN) {
+    if (cmdHistory->count >= CMD_HISTORY_LEN) {
 		//历史命令已满，把最老(队列头部)的命令扔掉
         cmdNxt = SH_LIST_ENTRY(cmdHistory->list.pstNext, CmdKeyLink, list);
         SH_ListDelete(&(cmdNxt->list));
@@ -658,7 +668,7 @@ int ShellTaskInit(ShellCB *shellCB)
 //通知内核我是命令行解析线程
 static int ShellKernelReg(unsigned int shellHandle)
 {
-    return ioctl(0, CONSOLE_CONTROL_REG_USERTASK, shellHandle);
+    return ioctl(STDIN_FILENO, CONSOLE_CONTROL_REG_USERTASK, shellHandle);
 }
 
 
@@ -691,11 +701,7 @@ void *ShellEntry(void *argv)
     }
 
     while (1) {
-        /* is console ready for shell ? */
-        if (ret != SH_OK)
-            break;
-
-        n = read(0, &ch, 1); //从标准输入读入一个字符
+        n = read(0, &ch, 1);
         if (n == 1) {
 			//处理用户输入的这个字符
             ShellCmdLineParse(ch, (OutputFunc)printf, shellCB);

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -51,6 +51,8 @@ extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
 
+#ifdef LOSCFG_KERNEL_VM
+
 extern char __exc_table_start[];
 extern char __exc_table_end[];
 
@@ -58,6 +60,11 @@ extern char __exc_table_end[];
 //内存区权限检查
 STATIC STATUS_T OsVmRegionRightCheck(LosVmMapRegion *region, UINT32 flags)
 {
+    if ((region->regionFlags & VM_MAP_REGION_FLAG_PERM_READ) != VM_MAP_REGION_FLAG_PERM_READ) {
+        VM_ERR("read permission check failed operation flags %x, region flags %x", flags, region->regionFlags);
+        return LOS_NOK;
+    }
+
     if ((flags & VM_MAP_PF_FLAG_WRITE) == VM_MAP_PF_FLAG_WRITE) {
         if ((region->regionFlags & VM_MAP_REGION_FLAG_PERM_WRITE) != VM_MAP_REGION_FLAG_PERM_WRITE) {
 			//本内存区不允许写，但用户要求写操作
@@ -84,10 +91,6 @@ STATIC VOID OsFaultTryFixup(ExcContext *frame, VADDR_T excVaddr, STATUS_T *statu
 	//异常表尺寸
     INT32 tableNum = (__exc_table_end - __exc_table_start) / sizeof(LosExcTable);
     LosExcTable *excTable = (LosExcTable *)__exc_table_start;
-#ifdef LOSCFG_DEBUG_VERSION
-    LosVmSpace *space = NULL;
-    VADDR_T vaddr;
-#endif
 
     if ((frame->regCPSR & CPSR_MODE_MASK) != CPSR_MODE_USR) {
 		//在内核态发生的错误,TBD
@@ -100,14 +103,6 @@ STATIC VOID OsFaultTryFixup(ExcContext *frame, VADDR_T excVaddr, STATUS_T *statu
             }
         }
     }
-
-#ifdef LOSCFG_DEBUG_VERSION	
-    vaddr = ROUNDDOWN(excVaddr, PAGE_SIZE);
-    space = LOS_SpaceGet(vaddr);
-    if (space != NULL) {
-        LOS_DumpMemRegion(vaddr);  //用户空间无法正常访问此虚拟地址，打印调试信息
-    }
-#endif
 }
 
 #ifdef LOSCFG_FS_VFS
@@ -144,7 +139,7 @@ STATIC STATUS_T OsDoReadFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
         ret = LOS_ArchMmuMap(&space->archMmu, vaddr, paddr, 1,
                              region->regionFlags & (~VM_MAP_REGION_FLAG_PERM_WRITE));
         if (ret < 0) {
-            VM_ERR("LOS_ArchMmuMap fial");
+            VM_ERR("LOS_ArchMmuMap failed");
             OsDelMapInfo(region, vmPgFault, false);
             (VOID)LOS_MuxRelease(&region->unTypeData.rf.file->f_mapping->mux_lock);
             return LOS_ERRNO_VM_NO_MEMORY;
@@ -258,7 +253,7 @@ status_t OsDoCowFault(LosVmMapRegion *region, LosVmPgFault *vmPgFault)
 	//将虚拟页重新映射到新的物理页上
     ret = LOS_ArchMmuMap(&space->archMmu, (VADDR_T)vmPgFault->vaddr, newPaddr, 1, region->regionFlags);
     if (ret < 0) {
-        VM_ERR("LOS_ArchMmuMap fial");
+        VM_ERR("LOS_ArchMmuMap failed");
         ret =  LOS_ERRNO_VM_NO_MEMORY;
         (VOID)LOS_MuxRelease(&region->unTypeData.rf.file->f_mapping->mux_lock);
         goto ERR_OUT;
@@ -513,6 +508,8 @@ DONE:
     (VOID)LOS_MuxRelease(&space->regionMux);
     return status;
 }
+
+#endif
 
 #ifdef __cplusplus
 #if __cplusplus

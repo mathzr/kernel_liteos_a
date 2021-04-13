@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -65,7 +65,9 @@
 
     .equ MPIDR_CPUID_MASK, 0xffU
 
-    .fpu vfpv4
+    .fpu neon-vfpv4
+    .syntax unified
+    .arch armv7-a
     .arm
 
 /* param0 is stack bottom, param1 is stack size, r12 hold cpu id */
@@ -112,6 +114,20 @@ __exception_handlers:
     /* Startup code which will get the machine into supervisor mode */
     .global reset_vector
     .type   reset_vector,function
+
+#ifdef LOSCFG_QUICK_START
+__quickstart_args_start:
+    .fill 512,1,0
+__quickstart_args_end:
+
+.global OsGetArgsAddr
+.type   OsGetArgsAddr,function
+
+OsGetArgsAddr:
+    ldr     r0, =__quickstart_args_start
+    bx      lr
+#endif
+
 reset_vector:
     /* clear register TPIDRPRW */
     mov     r0, #0
@@ -121,6 +137,20 @@ reset_vector:
     bic     r0, #(1<<12)
     bic     r0, #(1<<2 | 1<<0)
     mcr     p15, 0, r0, c1, c0, 0
+
+    /* enable fpu+neon */
+#ifndef LOSCFG_TEE_ENABLE
+    MRC    p15, 0, r0, c1, c1, 2
+    ORR    r0, r0, #0xC00
+    BIC    r0, r0, #0xC000
+    MCR    p15, 0, r0, c1, c1, 2
+
+    LDR    r0, =(0xF << 20)
+    MCR    p15, 0, r0, c1, c0, 2
+    ISB
+#endif
+    MOV    r3, #0x40000000
+    VMSR   FPEXC, r3
 
     /* r11: delta of physical address and virtual address */
     adr     r11, pa_va_offset
@@ -154,12 +184,16 @@ reloc_img_to_bottom_loop:
     sub     r11, r11, r12                       /* r11: eventual address offset */
 
 reloc_img_to_bottom_done:
+#ifdef LOSCFG_KERNEL_MMU
     ldr     r4, =g_firstPageTable               /* r4: physical address of translation table and clear it */
     add     r4, r4, r11
-    bl      page_table_clear
+    mov     r0, r4
+    mov     r1, #0
+    mov     r2, #MMU_DESCRIPTOR_L1_SMALL_ENTRY_NUMBERS
+    bl      memset_optimized                    /* optimized memset since r0 is 64-byte aligned */
 
     PAGE_TABLE_SET SYS_MEM_BASE, KERNEL_VMM_BASE, KERNEL_VMM_SIZE, MMU_DESCRIPTOR_KERNEL_L1_PTE_FLAGS
-    PAGE_TABLE_SET SYS_MEM_BASE, UNCACHED_VMM_BASE, UNCACHED_VMM_SIZE, MMU_INITIAL_MAP_STRONGLY_ORDERED
+    PAGE_TABLE_SET SYS_MEM_BASE, UNCACHED_VMM_BASE, UNCACHED_VMM_SIZE, MMU_INITIAL_MAP_NORMAL_NOCACHE
     PAGE_TABLE_SET PERIPH_PMM_BASE, PERIPH_DEVICE_BASE, PERIPH_DEVICE_SIZE, MMU_INITIAL_MAP_DEVICE
     PAGE_TABLE_SET PERIPH_PMM_BASE, PERIPH_CACHED_BASE, PERIPH_CACHED_SIZE, MMU_DESCRIPTOR_KERNEL_L1_PTE_FLAGS
     PAGE_TABLE_SET PERIPH_PMM_BASE, PERIPH_UNCACHED_BASE, PERIPH_UNCACHED_SIZE, MMU_INITIAL_MAP_STRONGLY_ORDERED
@@ -169,7 +203,6 @@ reloc_img_to_bottom_done:
     add     r4, r4, r11
     ldr     r4, [r4]
     add     r4, r4, r11                         /* r4: jump pagetable paddr */
-    bl      page_table_clear
 
     /* build 1M section mapping, in order to jump va during turing on mmu:pa == pa, va == pa */
     mov     r6, pc
@@ -180,11 +213,11 @@ reloc_img_to_bottom_done:
     str     r12, [r4, r7, lsr #(20 - 2)]        /* jumpTable[paIndex] = pt entry */
     rsb     r7, r11, r6, lsl #20                /* r7: va */
     str     r12, [r4, r7, lsr #(20 - 2)]        /* jumpTable[vaIndex] = pt entry */
-
+#endif
     bl      _bootaddr_setup
-
+#ifdef LOSCFG_KERNEL_MMU
     bl      mmu_setup                           /* set up the mmu */
-
+#endif
     /* clear out the interrupt and exception stack and set magic num to check the overflow */
     ldr     r0, =__undef_stack
     ldr     r1, =__exc_stack_top
@@ -233,20 +266,6 @@ warm_reset:
     sub    r0, r0, r2
     mov    sp, r0
 
-    /* enable fpu+neon */
-#ifndef LOSCFG_TEE_ENABLE
-    MRC    p15, 0, r0, c1, c1, 2
-    ORR    r0, r0, #0xC00
-    BIC    r0, r0, #0xC000
-    MCR    p15, 0, r0, c1, c1, 2
-
-    LDR    r0, =(0xF << 20)
-    MCR    p15, 0, r0, c1, c0, 2
-#endif
-
-    MOV    r3, #0x40000000
-    VMSR   FPEXC, r3
-
     LDR    r0, =__exception_handlers
     MCR    p15, 0, r0, c12, c0, 0
 
@@ -254,14 +273,11 @@ warm_reset:
     bne    cpu_start
 
 clear_bss:
-    ldr    r1, =__bss_start
+    ldr    r0, =__bss_start
     ldr    r2, =__bss_end
-    mov    r0, #0
-
-bss_loop:
-    cmp    r1, r2
-    strlo  r0, [r1], #4
-    blo    bss_loop
+    mov    r1, #0
+    sub    r2, r2, r0
+    bl     memset
 
 #if defined(LOSCFG_CC_STACKPROTECTOR_ALL) || \
     defined(LOSCFG_CC_STACKPROTECTOR_STRONG) || \
@@ -279,7 +295,7 @@ bss_loop:
 
 _start_hang:
     b      _start_hang
-
+#ifdef LOSCFG_KERNEL_MMU
 mmu_setup:
     mov     r12, #0
     mcr     p15, 0, r12, c8, c7, 0              /* Set c8 to control the TLB and set the mapping to invalid */
@@ -315,7 +331,7 @@ mmu_setup:
     isb
     sub     lr,  r11                            /* adjust lr with delta of physical address and virtual address */
     bx      lr
-
+#endif
     .code  32
 
     .global reset_platform
@@ -331,6 +347,7 @@ reset_platform:
     mov    pc, r0   // Jump to reset vector
 #endif
 cpu_start:
+#ifdef LOSCFG_KERNEL_MMU
     ldr     r4, =g_firstPageTable               /* r4 = physical address of translation table and clear it */
     add     r4, r4, r11
     orr     r8, r4, #MMU_TTBRx_FLAGS
@@ -341,6 +358,7 @@ cpu_start:
     add     r4, r4, r11                         /* r4 = tt_trampoline paddr */
 
     bl     mmu_setup
+#endif
     bl     secondary_cpu_start
     b      .
 
@@ -370,21 +388,8 @@ sp_set:
     sub    r2, r1, r3
     mov    sp, r2
     bx     lr          /* set sp */
-
-/*
- * r4: page table base address
- * r5 and r6 will be used as variable
- */
-page_table_clear:
-    mov     r5, #0
-    mov     r6, #0
-0:
-    str     r5, [r4, r6, lsl #2]
-    add     r6, #1
-    cmp     r6, #0x1000                         /* r6 < 4096 */
-    blt     0b
-    bx      lr
-
+    
+#ifdef LOSCFG_KERNEL_MMU
 /*
  * r4: page table base address
  * r6: physical address
@@ -411,7 +416,7 @@ page_table_build_loop:
     subs    r8, #1                              /* sizes-- */
     bne     page_table_build_loop
     bx      lr
-
+#endif
 /*
  * init stack to initial value
  * r0 is stack mem start, r1 is stack mem end
@@ -463,7 +468,20 @@ _bootaddr_setup:
     isb
 
     bx      lr
-
+    
+#ifdef LOSCFG_KERNEL_MMU
+memset_optimized:
+    mov     r3, r0
+    vdup.8  q0, r1
+    vmov    q1, q0
+    vmov    q2, q0
+    vmov    q3, q0
+memset_optimized_loop:
+    subs    r2, #64
+    vstmia  r3!, {d0 - d7}
+    bge     memset_optimized_loop
+    bx      lr
+#endif
 init_done:
     .long  0xDEADB00B
 

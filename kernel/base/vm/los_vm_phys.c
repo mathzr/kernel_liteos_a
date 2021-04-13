@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -41,6 +41,8 @@
 extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
+
+#ifdef LOSCFG_KERNEL_VM
 
 #define ONE_PAGE    1
 
@@ -111,7 +113,7 @@ VOID OsVmPhysSegAdd(VOID)
 {
     INT32 i, ret;
 
-    LOS_ASSERT(g_vmPhysSegNum <= VM_PHYS_SEG_MAX);
+    LOS_ASSERT(g_vmPhysSegNum < VM_PHYS_SEG_MAX);
 
 	//根据g_physArea数组来创建物理内存段，目前只有一个内存区
 	//实际上是保持相同的数组尺寸，所有也只会添加一个物理内存段
@@ -128,12 +130,12 @@ VOID OsVmPhysSegAdd(VOID)
 //对后续使用者不可见
 VOID OsVmPhysAreaSizeAdjust(size_t size)
 {
-    INT32 i;
-
-    for (i = 0; i < (sizeof(g_physArea) / sizeof(g_physArea[0])); i++) {
-        g_physArea[i].start += size;  //调整段内的起始地址
-        g_physArea[i].size -= size;   //减小段的剩余可用尺寸
-    }
+    /*
+     * The first physics memory segment is used for kernel image and kernel heap,
+     * so just need to adjust the first one here.
+     */
+    g_physArea[0].start += size;
+    g_physArea[0].size -= size;
 }
 
 
@@ -331,18 +333,58 @@ LosVmPage *OsVmVaddrToPage(VOID *ptr)
     return NULL;
 }
 
+STATIC INLINE VOID OsVmRecycleExtraPages(LosVmPage *page, size_t startPage, size_t endPage)
+{
+    if (startPage >= endPage) {
+        return;
+    }
 
-//从物理内存段中申请连续的内存页
-LosVmPage *OsVmPhysPagesAlloc(struct VmPhysSeg *seg, size_t nPages)
+    OsVmPhysPagesFreeContiguous(page, endPage - startPage);
+}
+
+STATIC LosVmPage *OsVmPhysLargeAlloc(struct VmPhysSeg *seg, size_t nPages)
 {
     struct VmFreeList *list = NULL;
     LosVmPage *page = NULL;
+    LosVmPage *tmp = NULL;
+    PADDR_T paStart;
+    PADDR_T paEnd;
+    size_t size = nPages << PAGE_SHIFT;
+
+    list = &seg->freeList[VM_LIST_ORDER_MAX - 1];
+    LOS_DL_LIST_FOR_EACH_ENTRY(page, &list->node, LosVmPage, node) {
+        paStart = page->physAddr;
+        paEnd = paStart + size;
+        if (paEnd > (seg->start + seg->size)) {
+            continue;
+        }
+
+        for (;;) {
+            paStart += PAGE_SIZE << (VM_LIST_ORDER_MAX - 1);
+            if ((paStart >= paEnd) || (paStart < seg->start) ||
+                (paStart >= (seg->start + seg->size))) {
+                break;
+            }
+            tmp = &seg->pageBase[(paStart - seg->start) >> PAGE_SHIFT];
+            if (tmp->order != (VM_LIST_ORDER_MAX - 1)) {
+                break;
+            }
+        }
+        if (paStart >= paEnd) {
+            return page;
+        }
+    }
+
+    return NULL;
+}
+
+STATIC LosVmPage *OsVmPhysPagesAlloc(struct VmPhysSeg *seg, size_t nPages)
+{
+    struct VmFreeList *list = NULL;
+    LosVmPage *page = NULL;
+    LosVmPage *tmp = NULL;
     UINT32 order;
     UINT32 newOrder;
-
-    if ((seg == NULL) || (nPages == 0)) {
-        return NULL;
-    }
 
     order = OsVmPagesToOrder(nPages); //根据需求的内存页数目求出order值，即求2的对数，并向上取整
     if (order < VM_LIST_ORDER_MAX) {
@@ -356,13 +398,24 @@ LosVmPage *OsVmPhysPagesAlloc(struct VmPhysSeg *seg, size_t nPages)
             page = LOS_DL_LIST_ENTRY(LOS_DL_LIST_FIRST(&list->node), LosVmPage, node);
             goto DONE;
         }
+    } else {
+        newOrder = VM_LIST_ORDER_MAX - 1;
+        page = OsVmPhysLargeAlloc(seg, nPages);
+        if (page != NULL) {
+            goto DONE;
+        }
     }
 	//不支持超过256页内存的申请，或者没有找到满足要求的连续空闲内存页
     return NULL;
 DONE:
-    OsVmPhysFreeListDelUnsafe(page); //从空闲链表中移除
-    OsVmPhysPagesSpiltUnsafe(page, order, newOrder); //只切割出我们需要的部分，其它部分放回空闲链表
-    return page; //返回满足要求的连续内存页
+
+    for (tmp = page; tmp < &page[nPages]; tmp = &tmp[1 << newOrder]) {
+        OsVmPhysFreeListDelUnsafe(tmp);
+    }
+    OsVmPhysPagesSpiltUnsafe(page, order, newOrder);
+    OsVmRecycleExtraPages(&page[nPages], nPages, ROUNDUP(nPages, (1 << min(order, newOrder))));
+
+    return page;
 }
 
 
@@ -402,7 +455,7 @@ VOID OsVmPhysPagesFree(LosVmPage *page, UINT8 order)
 VOID OsVmPhysPagesFreeContiguous(LosVmPage *page, size_t nPages)
 {
     paddr_t pa;
-    UINT32 order;    
+    UINT32 order;
     size_t n;
 
     while (TRUE) {
@@ -438,10 +491,6 @@ STATIC LosVmPage *OsVmPhysPagesGet(size_t nPages)
     struct VmPhysSeg *seg = NULL;
     LosVmPage *page = NULL;
     UINT32 segID;
-
-    if (nPages == 0) {
-        return NULL;
-    }
 
 	//遍历所有物理内存段
     for (segID = 0; segID < g_vmPhysSegNum; segID++) {
@@ -678,6 +727,18 @@ size_t LOS_PhysPagesFree(LOS_DL_LIST *list)
 
     return count; //返回成功释放的内存页数目
 }
+
+#else
+VADDR_T *LOS_PaddrToKVaddr(PADDR_T paddr)
+{
+    if ((paddr < DDR_MEM_ADDR) || (paddr >= (DDR_MEM_ADDR + DDR_MEM_SIZE))) {
+        return NULL;
+    }
+
+    return (VADDR_T *)DMA_TO_VMM_ADDR(paddr);
+}
+#endif
+
 
 #ifdef __cplusplus
 #if __cplusplus

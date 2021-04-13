@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -50,6 +50,8 @@
 extern "C" {
 #endif /* __cplusplus */
 #endif /* __cplusplus */
+
+#ifdef LOSCFG_KERNEL_VM
 
 #define     FLAG_SIZE               4
 #define     FLAG_START              2
@@ -556,6 +558,9 @@ VOID OsVmPhysDump(VOID)
     UINT32 totalFreePages = 0;
     UINT32 totalPages = 0;
     UINT32 segIndex;
+    UINT32 intSave;
+    UINT32 flindex;
+    UINT32 listCount[VM_LIST_ORDER_MAX] = {0};
 
 	//遍历所有的物理内存段，实际当前就1个物理内存段
     for (segIndex = 0; segIndex < g_vmPhysSegNum; segIndex++) {
@@ -566,11 +571,19 @@ VOID OsVmPhysDump(VOID)
             PRINTK("\r\n phys_seg      base         size        free_pages    \n");
             PRINTK(" --------      -------      ----------  ---------  \n");
 #endif
-            PRINTK(" %08p    %08p   0x%08x   %8u  \n", seg, seg->start, seg->size, segFreePages);
+            PRINTK(" 0x%08x    0x%08x   0x%08x   %8u  \n", seg, seg->start, seg->size, segFreePages);
             totalFreePages += segFreePages; //汇总空闲物理内存页数目
             totalPages += (seg->size >> PAGE_SHIFT); //汇总物理内存页数目
 
-			//打印各种链表的长度
+            LOS_SpinLockSave(&seg->freeListLock, &intSave);
+            for (flindex = 0; flindex < VM_LIST_ORDER_MAX; flindex++) {
+                listCount[flindex] = seg->freeList[flindex].listCnt;
+            }
+            LOS_SpinUnlockRestore(&seg->freeListLock, intSave);
+            for (flindex = 0; flindex < VM_LIST_ORDER_MAX; flindex++) {
+                PRINTK("order = %d, free_count = %d\n", flindex, listCount[flindex]);
+            }
+
             PRINTK("active   anon   %d\n", seg->lruSize[VM_LRU_ACTIVE_ANON]);
             PRINTK("inactive anon   %d\n", seg->lruSize[VM_LRU_INACTIVE_ANON]);
             PRINTK("active   file   %d\n", seg->lruSize[VM_LRU_ACTIVE_FILE]);
@@ -603,6 +616,8 @@ VOID OsVmPhysUsedInfoGet(UINT32 *usedCount, UINT32 *totalCount)
         }
     }
 }
+
+#endif
 
 #ifdef __cplusplus
 #if __cplusplus

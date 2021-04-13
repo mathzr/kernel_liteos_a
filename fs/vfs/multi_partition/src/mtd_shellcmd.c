@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -29,22 +29,16 @@
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "mtd_partition.h"
 #include "stdlib.h"
 #include "stdio.h"
 #include "los_config.h"
-#include "mtd_partition.h"
-#include "inode/inode.h"
 
 #ifdef LOSCFG_SHELL_CMD_DEBUG
 #include "shcmd.h"
 
-#if defined(LOSCFG_FS_JFFS)
-extern partition_param *g_spinorPartParam;
-#endif
-//JFFS文件系统的分区信息显示输出
 INT32 osShellCmdPartitionShow(INT32 argc, const CHAR **argv)
 {
-#if defined(LOSCFG_FS_JFFS)
     mtd_partition *node = NULL;
     const CHAR *fs = NULL;
     partition_param *param = NULL;
@@ -55,26 +49,21 @@ INT32 osShellCmdPartitionShow(INT32 argc, const CHAR **argv)
     } else {
         fs = argv[0];
     }
-#endif
 
-#if defined(LOSCFG_FS_JFFS)
-    if (strcmp(fs, "spinor") == 0) {
-        param = g_spinorPartParam;  //当前只支持 spinor
-    } else
-#endif
-    {
+    if (strcmp(fs, "nand") == 0) {
+        param = GetNandPartParam();
+    } else if (strcmp(fs, "spinor") == 0) {
+        param = GetSpinorPartParam();
+    } else {
         PRINT_ERR("not supported!\n");
         return -EINVAL;
     }
 
-#if defined(LOSCFG_FS_JFFS)
     if ((param == NULL) || (param->flash_mtd == NULL)) {
         PRINT_ERR("no partition!\n");
         return -EINVAL;
     }
 
-	//遍历分区信息列表
-	//输出分区信息
     LOS_DL_LIST_FOR_EACH_ENTRY(node, &param->partition_head->node_info, mtd_partition, node_info) {
         PRINTK("%s partition num:%u, blkdev name:%s, mountpt:%s, startaddr:0x%08x, length:0x%08x\n",
             fs, node->patitionnum, node->blockdriver_name, node->mountpoint_name,
@@ -82,7 +71,6 @@ INT32 osShellCmdPartitionShow(INT32 argc, const CHAR **argv)
             ((node->end_block - node->start_block) + 1) * param->block_size);
     }
     return ENOERR;
-#endif
 }
 
 SHELLCMD_ENTRY(partition_shellcmd, CMD_TYPE_EX, "partition", XARGS, (CmdCallBackFunc)osShellCmdPartitionShow);

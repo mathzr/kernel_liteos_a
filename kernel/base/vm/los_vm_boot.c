@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -49,16 +49,6 @@ extern "C" {
 UINTPTR g_vmBootMemBase = (UINTPTR)&__bss_end;
 BOOL g_kHeapInited = FALSE; //内核堆是否初始化
 
-//此地址区间是否一个合法的内核区间
-UINT32 OsVmAddrCheck(size_t tempAddr, size_t length)
-{
-    if ((tempAddr >= KERNEL_VMM_BASE) && ((tempAddr + length) <= (PERIPH_UNCACHED_BASE + PERIPH_UNCACHED_SIZE))) {
-        return LOS_OK; //合法
-    }
-
-    return LOS_NOK; //不合法
-}
-
 
 //以很简单的方式获取内存
 VOID *OsVmBootMemAlloc(size_t len)
@@ -66,7 +56,7 @@ VOID *OsVmBootMemAlloc(size_t len)
     UINTPTR ptr;
 
     if (g_kHeapInited) {
-        VM_ERR("kernel heap has been inited, should not to use boot mem alloc!");
+        VM_ERR("kernel heap has been initialized, do not to use boot memory allocation!");
         return NULL;  //如果内核堆已经就绪，那么就不能用这个弱智方法来获取内存了
         //因为这个方法申请的内存无法释放 :)
     }
@@ -78,7 +68,7 @@ VOID *OsVmBootMemAlloc(size_t len)
     return (VOID *)ptr;  //返回申请到的内存
 }
 
-
+#ifdef LOSCFG_KERNEL_VM
 //系统内存初始化
 UINT32 OsSysMemInit(VOID)
 {
@@ -95,17 +85,32 @@ UINT32 OsSysMemInit(VOID)
 
 	//内核物理页相关的初始化
     OsVmPageStartup();
-	//内存映射相关的初始化
+    g_kHeapInited = TRUE;
     OsInitMappingStartUp();
 
-    ret = ShmInit(); //共享内存相关的初始化
+#ifdef LOSCFG_KERNEL_SHM
+    ret = ShmInit();
     if (ret < 0) {
         VM_ERR("ShmInit fail");
         return LOS_NOK;
     }
-
+#endif
     return LOS_OK;
 }
+#else
+UINT32 OsSysMemInit(VOID)
+{
+    STATUS_T ret;
+
+    ret = OsKHeapInit(OS_KHEAP_BLOCK_SIZE);
+    if (ret != LOS_OK) {
+        VM_ERR("OsKHeapInit fail");
+        return LOS_NOK;
+    }
+    g_kHeapInited = TRUE;
+    return LOS_OK;
+}
+#endif
 
 #ifdef __cplusplus
 #if __cplusplus

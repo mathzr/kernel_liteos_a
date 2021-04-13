@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013-2019, Huawei Technologies Co., Ltd. All rights reserved.
- * Copyright (c) 2020, Huawei Device Co., Ltd. All rights reserved.
+ * Copyright (c) 2013-2019 Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2020-2021 Huawei Device Co., Ltd. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -69,9 +69,9 @@ LITE_OS_SEC_TEXT_MINOR VOID LOS_GetCpuCycle(UINT32 *highCnt, UINT32 *lowCnt)
 //启机以来的纳秒数
 LITE_OS_SEC_TEXT_MINOR UINT64 LOS_CurrNanosec(VOID)
 {
-    DOUBLE nanos;
+    UINT64 nanos;
 
-    nanos = (DOUBLE)HalClockGetCycles() * OS_SYS_NS_PER_SECOND / g_sysClock;
+    nanos = (UINT64)HalClockGetCycles() * OS_SYS_NS_PER_SECOND / g_sysClock;
     return (UINT64)nanos;
 }
 
