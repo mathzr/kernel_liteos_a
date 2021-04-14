@@ -48,7 +48,9 @@
 #define QUICKSTART_IOC_MAGIC    'T'
 #define QUICKSTART_INITSTEP2    _IO(QUICKSTART_IOC_MAGIC, 0)
 #define WAIT_FOR_SAMPLE         300000  // wait 300ms for sample
-#endifint main(int argc, char * const *argv)
+#endif
+
+int main(int argc, char * const *argv)
 {
     int ret;
     const char *shellPath = "/bin/shell";
