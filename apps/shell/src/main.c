@@ -108,7 +108,8 @@ int main()
     ShellCB *shellCB = NULL;
 
 	setbuf(stdout, NULL);
-	//申请shell控制块内存    shellCB = (ShellCB *)malloc(sizeof(ShellCB));
+	//申请shell控制块内存
+	shellCB = (ShellCB *)malloc(sizeof(ShellCB));
     if (shellCB == NULL) {
         goto ERR_OUT1;
     }

@@ -160,12 +160,10 @@ LITE_OS_SEC_TEXT_INIT INT32 main(VOID)
     OsSetMainTask();  
     OsCurrTaskSet(OsGetMainTask());  //设置当前任务为当前CPU核对应的main线程
 
-    /* set smp system counter freq */
-#if (LOSCFG_KERNEL_SMP == YES)
+    /* set system counter freq */
 #ifndef LOSCFG_TEE_ENABLE
 	//设置系统时钟频率
     HalClockFreqWrite(OS_SYS_CLOCK);
-#endif
 #endif
 
     /* system and chip info */
